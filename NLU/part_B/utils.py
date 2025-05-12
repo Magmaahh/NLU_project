@@ -1,0 +1,128 @@
+import torch
+import torch.utils.data as data
+import json
+import os
+from transformers import AutoTokenizer
+
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+
+IGNORE_INDEX = -100
+PAD_TOKEN = 0
+
+class Lang():
+    def __init__(self, intents, slots, cutoff=0):
+        self.slot2id = self.lab2id(slots)
+        self.intent2id = self.lab2id(intents, pad=False)
+        self.id2slot = {v:k for k, v in self.slot2id.items()}
+        self.id2intent = {v:k for k, v in self.intent2id.items()}
+
+    def lab2id(self, elements, pad=True):
+        vocab = {}
+        if pad:
+            vocab['pad'] = PAD_TOKEN
+        for elem in elements:
+                vocab[elem] = len(vocab)
+        return vocab
+    
+class IntentsAndSlots (data.Dataset):
+    def __init__(self, dataset, lang, bert_model, unk='unk'):
+        self.utterances = []
+        self.intents = []
+        self.slots = []
+
+        self.unk = unk
+        self.tokenizer = AutoTokenizer.from_pretrained(bert_model)
+        
+        for el in dataset:
+            self.utterances.append(el['utterance'])
+            self.slots.append(el['slots'])
+            self.intents.append(el['intent'])
+
+        self.utt_ids, self.slot_ids = self.mapping_seq(self.utterances, self.slots, lang.slot2id)
+        self.intent_ids = self.mapping_lab(self.intents, lang.intent2id)
+
+    def __len__(self):
+        return len(self.utterances)
+
+    def __getitem__(self, idx):
+        utt = torch.LongTensor(self.utt_ids[idx])
+        slots = torch.LongTensor(self.slot_ids[idx])
+        intent = self.intent_ids[idx]
+        sample = {'utterance': utt, 'slots': slots, 'intent': intent}
+        return sample
+
+    def mapping_lab(self, data, mapper):
+        return [mapper[x] if x in mapper else mapper[self.unk] for x in data]
+    
+    def mapping_seq(self, utterance_list, slot_list, mapper):
+        utt_ids = []
+        slot_ids = []
+
+        for utt, slots in zip(utterance_list, slot_list):
+            slot_labels = slots.split()
+            encoding = self.tokenizer(utt.split(), is_split_into_words=True, return_tensors=None, truncation=True)
+
+            word_ids = encoding.word_ids()
+            input_ids = encoding['input_ids']
+            
+            aligned_slot_ids = []
+            previous_word_id = None
+            label_id = 0
+
+            for i, word_id in enumerate(word_ids):
+                if word_id is None:
+                    aligned_slot_ids.append(IGNORE_INDEX)  # Special tokens like [CLS], [SEP]
+                elif word_id != previous_word_id:
+                    # First subtoken of a new word
+                    aligned_slot_ids.append(mapper.get(slot_labels[label_id], IGNORE_INDEX))
+                    previous_word_id = word_id
+                    label_id += 1
+                else:
+                    # Subsequent subtokens of the same word
+                    aligned_slot_ids.append(IGNORE_INDEX)
+
+            utt_ids.append(input_ids)
+            slot_ids.append(aligned_slot_ids)
+
+        return utt_ids, slot_ids
+
+def collate_fn(data):
+    def merge(sequences, pad_token):
+        lengths = [len(seq) for seq in sequences]
+        max_len = 1 if max(lengths)==0 else max(lengths)
+        padded_seqs = torch.LongTensor(len(sequences),max_len).fill_(pad_token)
+        for i, seq in enumerate(sequences):
+            end = lengths[i]
+            padded_seqs[i, :end] = seq
+        padded_seqs = padded_seqs.detach()
+        return padded_seqs, lengths
+    
+    data.sort(key=lambda x: len(x['utterance']), reverse=True) 
+    new_item = {}
+    for key in data[0].keys():
+        new_item[key] = [d[key] for d in data]
+    
+    utts, _ = merge(new_item['utterance'], PAD_TOKEN)
+    attention_mask = torch.LongTensor([[1 if id != PAD_TOKEN else 0 for id in seq] for seq in utts])
+    y_slots, _ = merge(new_item["slots"], IGNORE_INDEX)
+    intent = torch.LongTensor(new_item["intent"])
+    
+    utts = utts.to(DEVICE) 
+    intent = intent.to(DEVICE)
+    y_slots = y_slots.to(DEVICE)
+    attention_mask = attention_mask.to(DEVICE)
+    
+    new_item["utterances"] = utts
+    new_item["intents"] = intent
+    new_item["y_slots"] = y_slots
+    new_item["attention_mask"] = attention_mask
+    
+    return new_item
+
+def load_data(path):
+    dataset = []
+    
+    with open(path) as f:
+        dataset = json.loads(f.read())
+    return dataset
