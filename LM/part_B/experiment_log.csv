@@ -1,0 +1,5 @@
+model_id,optimizer,lr,training_batch_size,hid_size,emb_size,dev_ppl,test_ppl,weight_tying,var_dropout,notes
+001,SGD,1,64,200,300,120.84011718849835,126.61037822902809,yes,no,Apply weight tying
+002,SGD,1,64,200,300,114.51179657363429,112.23424737932865,yes,yes,Apply variational dropout
+003,SGD,1,64,200,300,111.65769467474176,110.5536425866636,yes,yes,Increase dropout to 0.3
+004,AvSGD,1,64,200,300,inf,96.61792942652922,yes,yes,Apply NT-AvSGD

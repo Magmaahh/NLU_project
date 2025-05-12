@@ -1,0 +1,1 @@
+model_id,optimizer,lr,training_batch_size,hid_size,emb_size,slot_f1,intent_acc,notes
