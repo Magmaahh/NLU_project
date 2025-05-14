@@ -9,6 +9,8 @@ import csv
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from model import *
+
 # Device settings
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -63,6 +65,7 @@ def train_model(model, train_loader, dev_loader, test_loader, criterion_train, c
     pbar = tqdm(range(1, params["n_epochs"] + 1))
 
     # Full training loop
+    print("\n==================== Training... ====================")
     for epoch in pbar:
         # Train on test data
         loss = train_loop(train_loader, optimizer, criterion_train, model, clip=params["clip"])
@@ -115,29 +118,60 @@ def init_weights(mat):
                 if m.bias != None:
                     m.bias.data.fill_(0.01)
 
+# Initializes the model with the provided settings
+def init_model(lang, vocab_len, params, configs):
+    if configs["use_lstm"]:
+        model = LM_LSTM(
+            params["emb_size"], params["hid_size"], vocab_len,
+            params["emb_dropout"], params["out_dropout"],
+            configs["use_dropout"], pad_index=lang.word2id["<pad>"]
+        ).to(DEVICE)
+    else:
+        model = LM_RNN(
+            params["emb_size"], params["hid_size"], vocab_len,
+            pad_index=lang.word2id["<pad>"]
+        ).to(DEVICE)
+
+    return model
+
+# Loads an existing model from the provided path
+def load_model(model_path, lang, vocab_len, params, configs):
+    print("\Loading the existing model...\n")
+    saved_data = torch.load(model_path, map_location=DEVICE)
+    model_state_dict = saved_data['model_state_dict']
+    saved_params = saved_data['params']
+    params.update(saved_params)
+    ref_model = init_model(model_path, lang, vocab_len, params, configs)
+    ref_model.load_state_dict(model_state_dict)
+
+    return ref_model
+
 # Allows the user to set the desired modality and model configuration
 def select_config(configs):
-    configs["use_lstm"] = True
-    configs["use_dropout"] = False
-    configs["use_adamw"] = False
-
     configs["training"] = input("Train or test mode? [train/test]: ").strip().lower() == "train"
     print("Choose model configuration:")
-    print("1. LSTM")
-    print("2. LSTM + Dropout")
-    print("3. LSTM + Dropout + AdamW")
+    if configs["training"]:
+        print("0. Basic RNN") # Added just for the sake of comparison with other configs during implementation
+        print("1. LSTM")
+        print("2. LSTM + Dropout")
+        print("3. LSTM + Dropout + AdamW")
+        valid_choices = {"0", "1", "2", "3"}
+    else:
+        print("1. LSTM")
+        print("2. LSTM + Dropout")
+        print("3. LSTM + Dropout + AdamW")
+        valid_choices = {"1", "2", "3"}
 
-    selected = False
-    while not selected:
-        choice = input("Enter your choice [1/2/3]: ").strip()
-        if choice in {"1", "2", "3"}:
-            selected = True
-        else: print("Invalid choice. Please enter 1, 2, or 3.")
-    if choice == "2":
-        configs["use_dropout"] = True
-    elif choice == "3":
-        configs["use_adamw"] = True
+    choice = None
+    while choice not in valid_choices:
+        choice = input(f"Enter your choice between {sorted(valid_choices)}: ").strip()
+        if choice not in valid_choices:
+            print(f"Invalid choice. Please select one between {sorted(valid_choices)}.")
+    configs["use_lstm"] = choice in {"1", "2", "3"}
+    configs["use_dropout"] = choice in {"2", "3"}
+    configs["use_adamw"] = choice == "3"
 
+    # Print summary
     print("\n==================== Selected Configuration ====================")
     print(f"Mode: {'Training' if configs['training'] else 'Testing'}")
     print(f"Model: {'LSTM' if configs['use_lstm'] else 'Basic RNN'}")
@@ -172,7 +206,7 @@ def select_params(params):
     print("\nCurrent parameters values:")
     for k, v in params.items():
         print(f"  {k}: {v}")
-    changing = input("Would you like to change any of the parameters above? [y/n]: ").strip().lower() == "y"
+    changing = input("\nWould you like to change any of the parameters above? [y/n]: ").strip().lower() == "y"
 
     while changing:
         key = input("Enter the parameter name to change (e.g., lr, hid_size): ").strip()

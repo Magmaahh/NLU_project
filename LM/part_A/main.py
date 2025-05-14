@@ -1,6 +1,5 @@
 import torch.optim as optim
 
-from model import *
 from utils import *
 from functions import *
 
@@ -50,50 +49,26 @@ if __name__ == "__main__":
 
     if configs["training"]: # Training mode
         # Select the hyperparameters
-        params = select_params(params)
+        params = select_params(params) 
 
         # Iniziatilize the model
-        if configs["use_lstm"]:
-            model = LM_LSTM(
-                params["emb_size"], params["hid_size"], vocab_len,
-                params["emb_dropout"], params["out_dropout"],
-                configs["use_dropout"], pad_index=lang.word2id["<pad>"]
-            ).to(DEVICE)
-        else:
-            model = LM_RNN(
-                params["emb_size"], params["hid_size"], vocab_len,
-                pad_index=lang.word2id["<pad>"]
-            ).to(DEVICE)
-
+        model = init_model(lang, vocab_len, params, configs)
         model.apply(init_weights)
-
-        # Select the optimizer
         optimizer = optim.AdamW(model.parameters(), lr=params["lr"]) if configs["use_adamw"] else optim.SGD(model.parameters(), lr=params["lr"])
 
         # Train the model
-        print("\n==================== Training... ====================")
         results = train_model(
             model, train_loader, dev_loader, test_loader,
             criterion_train, criterion_eval, optimizer, params
         )
+
+        # Compare the model with the existing one (if saved) and replace this if better
         save_model = True
-        if os.path.exists(model_path): # Compare with the existing model
+        if os.path.exists(model_path):
             # Load the existing model
-            if configs["use_lstm"]:
-                ref_model = LM_LSTM(
-                    params["emb_size"], params["hid_size"], vocab_len,
-                    params["emb_dropout"], params["out_dropout"],
-                    configs["use_dropout"], pad_index=lang.word2id["<pad>"]
-                ).to(DEVICE)
-            else:
-                ref_model = LM_RNN(
-                    params["emb_size"], params["hid_size"], vocab_len,
-                    pad_index=lang.word2id["<pad>"]
-                ).to(DEVICE)
-            ref_model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+            ref_model = load_model(model_path, lang, vocab_len, params, configs)
 
             # Evaluate the existing model performances
-            ref_model.eval()
             ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)
             
             # Compare the models
@@ -104,8 +79,8 @@ if __name__ == "__main__":
             else:
                 print(f"New model has lower test PPL ({results['final_ppl']:.2f} < {ref_ppl:.2f}). Replacing the model.\n")
 
-        # Save the model if better than the existing one
-        if save_model:
+        if save_model: 
+            # Save the model
             model_data = {
                 'model_state_dict': results["best_model"].state_dict(),
                 'params': params
@@ -116,31 +91,16 @@ if __name__ == "__main__":
         # Log and plot results
         log_results(configs, params, results, LOG_PATH)
         plot_data(configs, results, PLOTS_PATH)
+
     else: # Testing mode
         if os.path.exists(model_path): # Test the existing model
             # Load the existing model
-            print("\nTesting the selected model...\n")
-            saved_data = torch.load(model_path, map_location=DEVICE)
-            model_state_dict = saved_data['model_state_dict']
-            saved_params = saved_data['params']
-            params.update(saved_params)
-
-            if configs["use_lstm"]:
-                ref_model = LM_LSTM(
-                    params["emb_size"], params["hid_size"], vocab_len,
-                    params["emb_dropout"], params["out_dropout"],
-                    configs["use_dropout"], pad_index=lang.word2id["<pad>"]
-                ).to(DEVICE)
-            else:
-                ref_model = LM_RNN(
-                    params["emb_size"], params["hid_size"], vocab_len,
-                    pad_index=lang.word2id["<pad>"]
-                ).to(DEVICE)
-            ref_model.load_state_dict(model_state_dict)
+            ref_model = load_model(model_path, lang, vocab_len, params, configs)
 
             # Evaluate the existing model performances
-            ref_model.eval()
             ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)
+
+            # Show results
             print("\n==================== Test Results ====================")
             print(f"Test PPL of model with {get_config(configs)}: {ref_ppl:.2f}")
             print("=====================================================\n")
