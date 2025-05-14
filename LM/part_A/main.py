@@ -1,149 +1,149 @@
-import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from functools import partial
-import math
-import numpy as np
-from tqdm import tqdm
-import copy
-import csv
 
 from model import *
 from utils import *
 from functions import *
 
-DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+# Paths settings
+TRAIN_DATA_PATH = "dataset/ptb.train.txt"
+DEV_DATA_PATH = "dataset/ptb.valid.txt"
+TEST_DATA_PATH = "dataset/ptb.test.txt"
+MODELS_PATH = "bin"
+LOG_PATH = "experiment_log.csv"
+PLOTS_PATH = "plots"
 
-# Training hyperparameters
-out_dropout = 0.1
-emb_dropout = 0.1
-lr = 0.1
-batch_size_train = 64 # default 64
-hid_size = 200 # default 200
-emb_size = 300 # defaul 300
-clip = 5
-n_epochs = 100
-patience_init = 3
+# Default configuration settings
+configs = {
+    "training": True,
+    "use_lstm": False,
+    "use_dropout": False,
+    "use_adamw": False
+}
 
-# Constants to try out different configurations
-USE_LSTM = True
-USE_DROPOUT = False
-USE_ADAMW = False
-
-# Reference PPL to analyze model's performances
-REFERENCE_PPL = 250
-
-# Open log
-log_path = "experiment_log.csv"
-log_fields = [
-    "model_id", "optimizer", "lr", "training_batch_size", "hid_size", 
-    "emb_size", "slot_f1", "intent_acc", "notes"
-]
-os.makedirs('./bin', exist_ok=True)
-if not os.path.exists(log_path):
-    with open(log_path, mode="w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=log_fields)
-        writer.writeheader()
+# Default training hyperparameters
+params = {
+    "lr": 0.001,
+    "hid_size": 200,
+    "emb_size": 300,
+    "out_dropout": 0.1,
+    "emb_dropout": 0.1,
+    "tr_batch_size": 64,
+    "clip": 5,
+    "n_epochs": 100,
+    "patience_init": 3
+}
 
 if __name__ == "__main__":
-    # Data instantiation
-    train_raw = read_file("dataset/PennTreeBank/ptb.train.txt")
-    dev_raw = read_file("dataset/PennTreeBank/ptb.valid.txt")
-    test_raw = read_file("dataset/PennTreeBank/ptb.test.txt")
+    # Prepare data
+    train_loader, dev_loader, test_loader, lang, vocab_len = prepare_data(
+        TRAIN_DATA_PATH, DEV_DATA_PATH, TEST_DATA_PATH, params
+    )
 
-    lang = Lang(train_raw, ["<pad>", "<eos>"])
-    vocab_len = len(lang.word2id)
+    # Select mode and model
+    configs = select_config(configs)
+    model_filename = f"{get_config(configs)}.pt"
+    model_path = os.path.join(MODELS_PATH, model_filename)
 
-    train_dataset = PennTreeBank(train_raw, lang)
-    dev_dataset = PennTreeBank(dev_raw, lang)
-    test_dataset = PennTreeBank(test_raw, lang)
-
-    train_loader = DataLoader(train_dataset, batch_size=batch_size_train, collate_fn=partial(collate_fn, pad_token=lang.word2id["<pad>"]), shuffle=True)
-    dev_loader = DataLoader(dev_dataset, batch_size=128, collate_fn=partial(collate_fn, pad_token=lang.word2id["<pad>"]))
-    test_loader = DataLoader(test_dataset, batch_size=128, collate_fn=partial(collate_fn, pad_token=lang.word2id["<pad>"]))
-
-    # Model instantiation
-    if USE_LSTM:
-        model = LM_LSTM(emb_size, hid_size, vocab_len, emb_dropout, out_dropout, USE_DROPOUT, pad_index=lang.word2id["<pad>"]).to(DEVICE)
-        model.apply(init_weights)
-    else:
-        model = LM_RNN(emb_size, hid_size, vocab_len, pad_index=lang.word2id["<pad>"]).to(DEVICE)
-        model.apply(init_weights)
-        
-    if USE_ADAMW:
-        optimizer = optim.AdamW(model.parameters(), lr=lr)
-    else:
-        optimizer = optim.SGD(model.parameters(), lr=lr)
-
+    # Define the loss functions
     criterion_train = nn.CrossEntropyLoss(ignore_index=lang.word2id["<pad>"])
     criterion_eval = nn.CrossEntropyLoss(ignore_index=lang.word2id["<pad>"], reduction='sum')
 
-    # Model training
-    patience = patience_init
-    losses_train, losses_dev, sampled_epochs, ppls_dev = [], [], [], []
-    best_ppl = math.inf
-    best_model = None
-    pbar = tqdm(range(1, n_epochs + 1))
+    if configs["training"]: # Training mode
+        # Select the hyperparameters
+        params = select_params(params)
 
-    for epoch in pbar:
-        loss = train_loop(train_loader, optimizer, criterion_train, model, clip)
-        sampled_epochs.append(epoch)
-        losses_train.append(np.asarray(loss).mean())
-
-        ppl_dev, loss_dev = eval_loop(dev_loader, criterion_eval, model)
-        losses_dev.append(np.asarray(loss_dev).mean())
-        ppls_dev.append(ppl_dev)
-
-        pbar.set_description(f"Epoch {epoch} | Dev PPL: {ppl_dev:.2f} | Train Loss: {losses_train[-1]:.2f}")
-
-        if ppl_dev < best_ppl:
-            best_ppl = ppl_dev
-            best_model = copy.deepcopy(model).to('cpu')
-            patience = patience_init
+        # Iniziatilize the model
+        if configs["use_lstm"]:
+            model = LM_LSTM(
+                params["emb_size"], params["hid_size"], vocab_len,
+                params["emb_dropout"], params["out_dropout"],
+                configs["use_dropout"], pad_index=lang.word2id["<pad>"]
+            ).to(DEVICE)
         else:
-            patience -= 1
+            model = LM_RNN(
+                params["emb_size"], params["hid_size"], vocab_len,
+                pad_index=lang.word2id["<pad>"]
+            ).to(DEVICE)
 
-        if patience <= 0:
-            break
+        model.apply(init_weights)
 
-    # Model evaluation
-    best_model.to(DEVICE)
-    final_ppl, _ = eval_loop(test_loader, criterion_eval, best_model)
-    print('Test PPL: ', final_ppl)
+        # Select the optimizer
+        optimizer = optim.AdamW(model.parameters(), lr=params["lr"]) if configs["use_adamw"] else optim.SGD(model.parameters(), lr=params["lr"])
 
-    if os.path.exists(log_path):
-        with open(log_path, mode="r") as f:
-            reader = csv.reader(f)
-            next(reader)
-            row_count = sum(1 for _ in reader) + 1
-    else:
-        row_count = 1
+        # Train the model
+        print("\n==================== Training... ====================")
+        results = train_model(
+            model, train_loader, dev_loader, test_loader,
+            criterion_train, criterion_eval, optimizer, params
+        )
+        save_model = True
+        if os.path.exists(model_path): # Compare with the existing model
+            # Load the existing model
+            if configs["use_lstm"]:
+                ref_model = LM_LSTM(
+                    params["emb_size"], params["hid_size"], vocab_len,
+                    params["emb_dropout"], params["out_dropout"],
+                    configs["use_dropout"], pad_index=lang.word2id["<pad>"]
+                ).to(DEVICE)
+            else:
+                ref_model = LM_RNN(
+                    params["emb_size"], params["hid_size"], vocab_len,
+                    pad_index=lang.word2id["<pad>"]
+                ).to(DEVICE)
+            ref_model.load_state_dict(torch.load(model_path, map_location=DEVICE))
 
-    model_id = f"{row_count:03d}"
+            # Evaluate the existing model performances
+            ref_model.eval()
+            ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)
+            
+            # Compare the models
+            print(f"Comparing models...\nExisting model PPL: {ref_ppl:.2f}")
+            if ref_ppl <= results["final_ppl"]:
+                save_model = False
+                print("Existing model is better or equal. Keeping it.\n")
+            else:
+                print(f"New model has lower test PPL ({results['final_ppl']:.2f} < {ref_ppl:.2f}). Replacing the model.\n")
 
-    # Save the model if final perplexity is below the reference value
-    if final_ppl <= REFERENCE_PPL:
-        torch.save(best_model.state_dict(), os.path.join("bin", f"{model_id}.pt"))
+        # Save the model if better than the existing one
+        if save_model:
+            model_data = {
+                'model_state_dict': results["best_model"].state_dict(),
+                'params': params
+            }
+            torch.save(model_data, model_path)
+            print(f"Saved model and hyperparameters as {model_filename}\n")
 
-    # Log model's results  
-    with open(log_path, mode="a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=log_fields)
-        writer.writerow({
-            "model_id": model_id,
-            "optimizer": "SGD" if not USE_ADAMW else "AdamW",
-            "lr": lr,
-            "training_batch_size": batch_size_train,
-            "hid_size": hid_size,
-            "emb_size": emb_size,
-            "dev_PPL": best_ppl,
-            "test_PPL": final_ppl,
-            "notes": ""
-        })
+        # Log and plot results
+        log_results(configs, params, results, LOG_PATH)
+        plot_data(configs, results, PLOTS_PATH)
+    else: # Testing mode
+        if os.path.exists(model_path): # Test the existing model
+            # Load the existing model
+            print("\nTesting the selected model...\n")
+            saved_data = torch.load(model_path, map_location=DEVICE)
+            model_state_dict = saved_data['model_state_dict']
+            saved_params = saved_data['params']
+            params.update(saved_params)
 
-    plot_data(model_id, sampled_epochs, losses_train, losses_dev, ppls_dev)
-  
-    '''TO DO:
-    add TRAINING and TESTING modes (EXECUTABLES)
-       TRAINING -> Select config, select hyperparams values, train, save model in bin if the best of the config
-       TESTING -> Select set of weight from bin folder, evaluate it
-    '''
+            if configs["use_lstm"]:
+                ref_model = LM_LSTM(
+                    params["emb_size"], params["hid_size"], vocab_len,
+                    params["emb_dropout"], params["out_dropout"],
+                    configs["use_dropout"], pad_index=lang.word2id["<pad>"]
+                ).to(DEVICE)
+            else:
+                ref_model = LM_RNN(
+                    params["emb_size"], params["hid_size"], vocab_len,
+                    pad_index=lang.word2id["<pad>"]
+                ).to(DEVICE)
+            ref_model.load_state_dict(model_state_dict)
+
+            # Evaluate the existing model performances
+            ref_model.eval()
+            ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)
+            print("\n==================== Test Results ====================")
+            print(f"Test PPL of model with {get_config(configs)}: {ref_ppl:.2f}")
+            print("=====================================================\n")
+        else:
+            print(f"\nError: Model {model_filename} not found. Exiting.")
+            exit(1)

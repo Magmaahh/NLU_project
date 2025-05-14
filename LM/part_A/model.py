@@ -26,8 +26,7 @@ class LM_LSTM(nn.Module):
 
         # Define the network's layers
         self.embedding = nn.Embedding(output_size, emb_size, padding_idx=pad_index)
-        
-        # Define dropout layers
+
         if self.use_dropout:
             self.emb_dropout = nn.Dropout(emb_dropout) # First dropout layer
             self.out_dropout = nn.Dropout(out_dropout) # Second dropout layer
