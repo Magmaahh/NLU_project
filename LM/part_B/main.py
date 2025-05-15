@@ -1,6 +1,5 @@
 import torch.optim as optim
 
-from model import *
 from utils import *
 from functions import *
 
@@ -29,7 +28,7 @@ params = {
     "tr_batch_size": 64,
     "clip": 5,
     "n_epochs": 100,
-    "patience_init": 3
+    "patience_init": 3,
 }
 
 if __name__ == "__main__":
@@ -39,7 +38,7 @@ if __name__ == "__main__":
     )
 
     # Select mode and model
-    configs = select_config(configs)
+    select_config(configs)
     model_filename = f"{get_config(configs)}.pt"
     model_path = os.path.join(MODELS_PATH, model_filename)
 
@@ -49,28 +48,26 @@ if __name__ == "__main__":
 
     if configs["training"]: # Training mode
         # Select the hyperparameters
-        params = select_params(params)
+        select_params(params) 
 
         # Iniziatilize the model
-        model = LM_LSTM(
-            params["emb_size"], params["hid_size"], vocab_len, params["dropout"], 
-            configs["use_weight_tying"], configs["use_var_dropout"], pad_index=lang.word2id["<pad>"]
-        ).to(DEVICE)
+        model = init_model(lang, vocab_len, params, configs)
         model.apply(init_weights)
         optimizer = optim.SGD(model.parameters(), lr=params["lr"])
 
-        # Train the model   
+        # Train the model
         results = train_model(
             model, train_loader, dev_loader, test_loader,
-            criterion_train, criterion_eval, optimizer, params
-        )
+            criterion_train, criterion_eval, optimizer, params, use_avsgd = True if configs["use_avsgd"] else False
+            )
+
+        # Compare the model with the existing one (if saved) and replace this if better
         save_model = True
-        if os.path.exists(model_path): # Compare with the existing model
+        if os.path.exists(model_path):
             # Load the existing model
-            ref_model = load_existing(model_path, lang, vocab_len, params, configs)
+            ref_model = load_model(model_path, lang, vocab_len, params)
 
             # Evaluate the existing model performances
-            ref_model.eval()
             ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)
             
             # Compare the models
@@ -81,8 +78,8 @@ if __name__ == "__main__":
             else:
                 print(f"New model has lower test PPL ({results['final_ppl']:.2f} < {ref_ppl:.2f}). Replacing the model.\n")
 
-        # Save the model if better than the existing one
-        if save_model:
+        if save_model: 
+            # Save the model
             model_data = {
                 'model_state_dict': results["best_model"].state_dict(),
                 'params': params
@@ -93,15 +90,16 @@ if __name__ == "__main__":
         # Log and plot results
         log_results(configs, params, results, LOG_PATH)
         plot_data(configs, results, PLOTS_PATH)
+
     else: # Testing mode
         if os.path.exists(model_path): # Test the existing model
             # Load the existing model
-            ref_model = load_existing(model_path, lang, vocab_len, params, configs)
+            ref_model = load_model(model_path, lang, vocab_len, params, configs)
 
             # Evaluate the existing model performances
-            ref_model.eval()
             ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)
 
+            # Show results
             print("\n==================== Test Results ====================")
             print(f"Test PPL of model with {get_config(configs)}: {ref_ppl:.2f}")
             print("=====================================================\n")

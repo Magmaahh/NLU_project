@@ -39,7 +39,7 @@ if __name__ == "__main__":
     )
 
     # Select mode and model
-    configs = select_config(configs)
+    select_config(configs)
     model_filename = f"{get_config(configs)}.pt"
     model_path = os.path.join(MODELS_PATH, model_filename)
 
@@ -49,7 +49,7 @@ if __name__ == "__main__":
 
     if configs["training"]: # Training mode
         # Select the hyperparameters
-        params = select_params(params) 
+        select_params(params) 
 
         # Iniziatilize the model
         model = init_model(lang, vocab_len, params, configs)

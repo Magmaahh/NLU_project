@@ -9,26 +9,58 @@ import csv
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from model import *
+
 # Device settings
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-# Trains the model for one epoch over the provided data
-def train_loop(data, optimizer, criterion, model, clip=5):
-    model.train() # Set model to training mode
+# Trains the model for one epoch over the provided data; AvSGD logic added
+def train_loop(data, optimizer, criterion, model, use_avsgd, avsgd_state, dev_loader, criterion_eval, clip=5):
     loss_array = []
     number_of_tokens = []
-    
+
+    # NT-AvSGD hyperparameters
+    l_interval = len(data)
+    n_interval = 5
+
+    model.train()
     for sample in data:
-        optimizer.zero_grad() # Zeroing the gradient
-        output = model(sample['source']) # Forward pass
-        loss = criterion(output, sample['target']) # Compute loss
+        optimizer.zero_grad()
+        device = next(model.parameters()).device
+        source = sample['source'].to(device)
+        target = sample['target'].to(device)
+
+        output = model(source)
+        loss = criterion(output, target)
+
         loss_array.append(loss.item() * sample["number_tokens"])
         number_of_tokens.append(sample["number_tokens"])
-        loss.backward() # Compute the gradient
-        torch.nn.utils.clip_grad_norm_(model.parameters(), clip) # clip the gradient to avoid exploding gradients
-        optimizer.step() # Update the weights
-        
-    return sum(loss_array)/sum(number_of_tokens)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), clip)
+        optimizer.step()
+
+        if use_avsgd:
+            if avsgd_state["step"] % l_interval == 0 and avsgd_state["T"] is None:
+                ppl_dev, _ = eval_loop(dev_loader, criterion_eval, model)
+                model.train()
+                if avsgd_state["t"] > n_interval and ppl_dev > min(avsgd_state["logs"][:avsgd_state["t"]-n_interval]):
+                    avsgd_state["T"] = avsgd_state["step"]
+                    print(f"Averaging triggered at step {avsgd_state['T']} with validation PPL {ppl_dev:.2f}")
+                avsgd_state["logs"].append(ppl_dev)
+                avsgd_state["t"] += 1
+
+            if avsgd_state["T"] is not None:
+                with torch.no_grad():
+                    model_params = [param.detach().clone() for param in model.parameters()]
+                    if avsgd_state["avg_weights"] is None:
+                        avsgd_state["avg_weights"] = model_params
+                    else:
+                        for i in range(len(avsgd_state["avg_weights"])):
+                            avsgd_state["avg_weights"][i] += model_params[i]
+                avsgd_state["avg_count"] += 1
+        avsgd_state["step"] = avsgd_state["step"] + 1
+
+    return sum(loss_array) / sum(number_of_tokens)
 
 # Evaluates the model over the provided data
 def eval_loop(data, criterion, model):
@@ -49,7 +81,7 @@ def eval_loop(data, criterion, model):
     return ppl, loss_to_return
 
 # Runs the whole training process for the model and provides a final evaluation on its performances
-def train_model(model, train_loader, dev_loader, test_loader, criterion_train, criterion_eval, optimizer, params):
+def train_model(model, train_loader, dev_loader, test_loader, criterion_train, criterion_eval, optimizer, params, use_avsgd):
     results = {
         "best_model": None,
         "losses_train": [],
@@ -59,13 +91,22 @@ def train_model(model, train_loader, dev_loader, test_loader, criterion_train, c
         "best_ppl": math.inf,
         "final_ppl": None,
     }
+    avsgd_state = {
+        "step": 0,
+        "T": None,
+        "t": 0,
+        "logs": [],
+        "avg_weights": None,
+        "avg_count": 0,
+    }
     patience = params["patience_init"]
     pbar = tqdm(range(1, params["n_epochs"] + 1))
 
     # Full training loop
+    print("\n==================== Training... ====================")
     for epoch in pbar:
         # Train on test data
-        loss = train_loop(train_loader, optimizer, criterion_train, model, clip=params["clip"])
+        loss = train_loop(train_loader, optimizer, criterion_train, model, use_avsgd, avsgd_state, dev_loader, criterion_eval, clip=params["clip"])
         results["sampled_epochs"].append(epoch)
         results["losses_train"].append(np.asarray(loss).mean())
 
@@ -77,15 +118,25 @@ def train_model(model, train_loader, dev_loader, test_loader, criterion_train, c
         pbar.set_description(f"Epoch {epoch} | Dev PPL: {ppl_dev:.2f} | Train Loss: {results['losses_train'][-1]:.2f}")
 
         # Patience-based early stopping logic
-        if ppl_dev < results["best_ppl"]:
-            results["best_ppl"] = ppl_dev
-            results["best_model"] = copy.deepcopy(model).to('cpu')
-            patience = params["patience_init"]
-        else:
-            patience -= 1
+        if not use_avsgd:
+            if ppl_dev < results["best_ppl"]:
+                results["best_ppl"] = ppl_dev
+                results["best_model"] = copy.deepcopy(model).to('cpu')
+                patience = params["patience_init"]
+            else:
+                patience -= 1
 
-        if patience <= 0:
-            break
+            if patience <= 0:
+                break
+        
+    if use_avsgd and avsgd_state["avg_weights"] is not None:
+        with torch.no_grad():
+            for param, avg in zip(model.parameters(), avsgd_state["avg_weights"]):
+                param.data = avg / avsgd_state["avg_count"]
+        results["best_model"] = copy.deepcopy(model).to('cpu')
+        print(f"Averaged over {avsgd_state['avg_count']} steps starting from step {avsgd_state['T']}.")
+    else:
+        results["best_model"] = copy.deepcopy(model).to('cpu')
 
     # Evaluate on test data
     results["best_model"].to(DEVICE)
@@ -115,52 +166,77 @@ def init_weights(mat):
                 if m.bias != None:
                     m.bias.data.fill_(0.01)
 
+# Initializes the model with the provided settings
+def init_model(lang, vocab_len, params, configs):
+    model = LM_LSTM(
+        params["emb_size"], params["hid_size"], vocab_len,
+        params["dropout"], configs["use_weight_tying"],
+        configs["use_var_dropout"], pad_index=lang.word2id["<pad>"]
+    ).to(DEVICE)
+    
+    return model
+
+# Loads an existing model from the provided path
+def load_model(model_path, lang, vocab_len, params, configs):
+    print("\Loading the existing model...\n")
+    saved_data = torch.load(model_path, map_location=DEVICE)
+    model_state_dict = saved_data['model_state_dict']
+    saved_params = saved_data['params']
+    params.update(saved_params)
+    ref_model = init_model(model_path, lang, vocab_len, params, configs)
+    ref_model.load_state_dict(model_state_dict)
+
+    return ref_model
+
 # Allows the user to set the desired modality and model configuration
 def select_config(configs):
-    configs["training"] = input("Train or test mode? [train/test]: ").strip().lower() == "train"
+    mode_input = input("Train or test mode? [train/test]: ").strip().lower()
+    if mode_input not in {"train", "test"}:
+        print("Invalid input. Defaulting to test mode.")
+        mode_input = "test"
+    configs["training"] = mode_input == "train"
+
+    config_options = [
+        "Basic LSTM",
+        "LSTM + weight tying",
+        "LSTM + weight tying + variational dropout",
+        "LSTM + weight tying + variational dropout + NT-AvSGD"
+    ]
     print("Choose model configuration:")
-    if configs["training"]:
-        print("0. Basic RNN") # Added just for the sake of comparison with other configs during implementation
-        print("1. LSTM")
-        print("2. LSTM + Dropout")
-        print("3. LSTM + Dropout + AdamW")
-        valid_choices = {"0", "1", "2", "3"}
-    else:
-        print("1. LSTM")
-        print("2. LSTM + Dropout")
-        print("3. LSTM + Dropout + AdamW")
-        valid_choices = {"1", "2", "3"}
+    start_idx = 0 if configs["training"] else 1
+    for idx in range(start_idx, len(config_options)):
+        print(f"{idx}. {config_options[idx]}")
+    valid_choices = {str(i) for i in range(start_idx, len(config_options))}
 
     choice = None
     while choice not in valid_choices:
         choice = input(f"Enter your choice between {sorted(valid_choices)}: ").strip()
         if choice not in valid_choices:
             print(f"Invalid choice. Please select one between {sorted(valid_choices)}.")
-    configs["use_lstm"] = choice in {"1", "2", "3"}
-    configs["use_dropout"] = choice in {"2", "3"}
-    configs["use_adamw"] = choice == "3"
+    configs["use_weight_tying"] = choice in {"1", "2", "3"}
+    configs["use_var_dropout"] = choice in {"2", "3"}
+    configs["use_avsgd"] = choice == "3"
 
     # Print summary
     print("\n==================== Selected Configuration ====================")
     print(f"Mode: {'Training' if configs['training'] else 'Testing'}")
-    print(f"Model: {'LSTM' if configs['use_lstm'] else 'Basic RNN'}")
-    print(f"Dropout: {'Enabled' if configs['use_dropout'] else 'Disabled'}")
-    print(f"Optimizer: {'AdamW' if configs['use_adamw'] else 'SGD'}")
+    print("Model: LSTM")
+    print(f"Weight tying: {'Enabled' if configs['use_weight_tying'] else 'Disabled'}")
+    print(f"Variational dropout: {'Enabled' if configs['use_var_dropout'] else 'Disabled'}")
+    print(f"NT-AvSGD: {'Enabled' if configs['use_avsgd'] else 'Disabled'}")
     print("===============================================================\n")
-
-    return configs
 
 # Returns a string summarizing the selected model configuration
 def get_config(configs):
     parts = []
-    if configs["use_lstm"]:
-        parts.append("LSTM")
-    if configs["use_dropout"]:
-        parts.append("dropout")
-    if configs["use_adamw"]:
-        parts.append("AdamW")
+    if configs["use_weight_tying"]:
+        parts.append("weight tying")
+    if configs["use_var_dropout"]:
+        parts.append("variational dropout")
+    if configs["use_avsgd"]:
+        parts.append("NT-AvSGD")
         
-    return " + ".join(parts) if parts else "Basic RNN"
+    return "LSTM" + (" + " + " + ".join(parts) if parts else "")
 
 # Casts a string value to a specified type with error handling
 def cast_value(value, to_type):
@@ -175,7 +251,11 @@ def select_params(params):
     print("\nCurrent parameters values:")
     for k, v in params.items():
         print(f"  {k}: {v}")
-    changing = input("Would you like to change any of the parameters above? [y/n]: ").strip().lower() == "y"
+    choice_input = input("\nWould you like to change any of the parameters above? [y/n]: ").strip().lower()
+    if choice_input not in {"y", "n"}:
+        print("Invalid input. Defaulting to no.")
+        choice_input = "n"
+    changing = choice_input == "y"
 
     while changing:
         key = input("Enter the parameter name to change (e.g., lr, hid_size): ").strip()
@@ -187,17 +267,17 @@ def select_params(params):
             if casted_val is not None:
                 params[key] = casted_val
                 print(f"Updated '{key}' to {casted_val}\n")
+                changing = False
 
-        more = input("Change another parameter? [y/n]: ").strip().lower()
-        changing = more == "y"
-
-    return params
+        if not changing:
+            more = input("Change another parameter? [y/n]: ").strip().lower()
+            changing = more == "y"
 
 # Logs the training configuration and results into a CSV file
 def log_results(configs, params, results, log_path):
     log_fields = [
             "model_config", "lr", "training_batch_size", "hid_size", 
-            "emb_size", "out_dropout", "emb_dropout", "dev_PPL", "test_PPL", "notes"
+            "emb_size", "dropout", "dev_PPL", "test_PPL", "notes"
         ]
     
     print("==================== Logging Results ====================")
@@ -209,8 +289,7 @@ def log_results(configs, params, results, log_path):
             "training_batch_size": params["tr_batch_size"],
             "hid_size": params["hid_size"],
             "emb_size": params["emb_size"],
-            "out_dropout": params["out_dropout"],
-            "emb_dropout": params["emb_dropout"],
+            "dropout": params["out_dropout"],
             "dev_PPL": results["best_ppl"],
             "test_PPL": results["final_ppl"],
             "notes": ""

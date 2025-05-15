@@ -179,8 +179,6 @@ def select_config(configs):
     print(f"Optimizer: {'AdamW' if configs['use_adamw'] else 'SGD'}")
     print("===============================================================\n")
 
-    return configs
-
 # Returns a string summarizing the selected model configuration
 def get_config(configs):
     parts = []
@@ -221,8 +219,6 @@ def select_params(params):
 
         more = input("Change another parameter? [y/n]: ").strip().lower()
         changing = more == "y"
-
-    return params
 
 # Logs the training configuration and results into a CSV file
 def log_results(configs, params, results, log_path):
