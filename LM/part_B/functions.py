@@ -6,15 +6,41 @@ import numpy as np
 from tqdm import tqdm
 import copy
 import csv
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from model import *
 
 # Device settings
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-# Trains the model for one epoch over the provided data; AvSGD logic added
+# Updates NT-AvSGD state and stores parameters for averaging when conditions are met
+def avsgd_step(model, l_interval, n_interval, avsgd_state, dev_loader, criterion_eval):
+    # At the end of each epoch (every l_interval steps), check if averaging should be triggered
+    if avsgd_state["step"] % l_interval == 0 and avsgd_state["T"] is None:
+        ppl_dev, _ = eval_loop(dev_loader, criterion_eval, model)
+        model.train()
+        # If enough logs were stored (t > n_interval) and performance has degraded compared to first n_interval results, trigger weight averaging
+        if avsgd_state["t"] > n_interval:
+            past_ppls = avsgd_state["logs"][:avsgd_state["t"] - n_interval]
+            if past_ppls and ppl_dev > min(past_ppls):
+                avsgd_state["T"] = avsgd_state["step"]
+                print(f"Averaging triggered at step {avsgd_state['T']} with validation PPL {ppl_dev:.2f}")
+        avsgd_state["logs"].append(ppl_dev)
+        avsgd_state["t"] += 1
+
+    # If averaging has been triggered, accumulate model parameters for averaging
+    if avsgd_state["T"] is not None:
+        with torch.no_grad():
+            model_params = [param.detach().clone() for param in model.parameters()]
+            if avsgd_state["avg_weights"] is None:
+                avsgd_state["avg_weights"] = model_params
+            else:
+                for i in range(len(avsgd_state["avg_weights"])):
+                    avsgd_state["avg_weights"][i] += model_params[i]
+        avsgd_state["avg_count"] += 1
+
+    avsgd_state["step"] += 1
+
+# Trains the model for one epoch over the provided data
 def train_loop(data, optimizer, criterion, model, use_avsgd, avsgd_state, dev_loader, criterion_eval, clip=5):
     loss_array = []
     number_of_tokens = []
@@ -40,25 +66,7 @@ def train_loop(data, optimizer, criterion, model, use_avsgd, avsgd_state, dev_lo
         optimizer.step()
 
         if use_avsgd:
-            if avsgd_state["step"] % l_interval == 0 and avsgd_state["T"] is None:
-                ppl_dev, _ = eval_loop(dev_loader, criterion_eval, model)
-                model.train()
-                if avsgd_state["t"] > n_interval and ppl_dev > min(avsgd_state["logs"][:avsgd_state["t"]-n_interval]):
-                    avsgd_state["T"] = avsgd_state["step"]
-                    print(f"Averaging triggered at step {avsgd_state['T']} with validation PPL {ppl_dev:.2f}")
-                avsgd_state["logs"].append(ppl_dev)
-                avsgd_state["t"] += 1
-
-            if avsgd_state["T"] is not None:
-                with torch.no_grad():
-                    model_params = [param.detach().clone() for param in model.parameters()]
-                    if avsgd_state["avg_weights"] is None:
-                        avsgd_state["avg_weights"] = model_params
-                    else:
-                        for i in range(len(avsgd_state["avg_weights"])):
-                            avsgd_state["avg_weights"][i] += model_params[i]
-                avsgd_state["avg_count"] += 1
-        avsgd_state["step"] = avsgd_state["step"] + 1
+            avsgd_step(model, l_interval, n_interval, avsgd_state, dev_loader, criterion_eval)
 
     return sum(loss_array) / sum(number_of_tokens)
 
@@ -128,7 +136,8 @@ def train_model(model, train_loader, dev_loader, test_loader, criterion_train, c
 
             if patience <= 0:
                 break
-        
+
+    # If averaging was triggered, average the stored weights to obtain the final values
     if use_avsgd and avsgd_state["avg_weights"] is not None:
         with torch.no_grad():
             for param, avg in zip(model.parameters(), avsgd_state["avg_weights"]):
@@ -177,13 +186,12 @@ def init_model(lang, vocab_len, params, configs):
     return model
 
 # Loads an existing model from the provided path
-def load_model(model_path, lang, vocab_len, params, configs):
+def load_model(model_path, lang, vocab_len, configs):
     print("\Loading the existing model...\n")
     saved_data = torch.load(model_path, map_location=DEVICE)
     model_state_dict = saved_data['model_state_dict']
-    saved_params = saved_data['params']
-    params.update(saved_params)
-    ref_model = init_model(model_path, lang, vocab_len, params, configs)
+    ref_params = saved_data['params']
+    ref_model = init_model(lang, vocab_len, ref_params, configs)
     ref_model.load_state_dict(model_state_dict)
 
     return ref_model
@@ -246,11 +254,15 @@ def cast_value(value, to_type):
         print(f"Invalid type: expected {to_type.__name__}. Please try again.")
         return None
 
-# Allows the user to modify training hyperparameters via terminal input
-def select_params(params):
+# Prints the current parameters' values
+def print_params(params):
     print("\nCurrent parameters values:")
     for k, v in params.items():
         print(f"  {k}: {v}")
+
+# Allows the user to modify training hyperparameters via terminal input
+def select_params(params):
+    print_params(params)
     choice_input = input("\nWould you like to change any of the parameters above? [y/n]: ").strip().lower()
     if choice_input not in {"y", "n"}:
         print("Invalid input. Defaulting to no.")
@@ -270,17 +282,20 @@ def select_params(params):
                 changing = False
 
         if not changing:
+            print_params(params)
             more = input("Change another parameter? [y/n]: ").strip().lower()
             changing = more == "y"
 
 # Logs the training configuration and results into a CSV file
 def log_results(configs, params, results, log_path):
     log_fields = [
-            "model_config", "lr", "training_batch_size", "hid_size", 
-            "emb_size", "dropout", "dev_PPL", "test_PPL", "notes"
-        ]
-    
-    print("==================== Logging Results ====================")
+        "model_config", "lr", "training_batch_size", "hid_size", 
+        "emb_size", "dropout", "dev_PPL", "test_PPL", "notes"
+    ]
+    if not os.path.exists(log_path):
+        with open(log_path, mode="w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=log_fields)
+            writer.writeheader()
     with open(log_path, mode="a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=log_fields)
         writer.writerow({
@@ -289,42 +304,8 @@ def log_results(configs, params, results, log_path):
             "training_batch_size": params["tr_batch_size"],
             "hid_size": params["hid_size"],
             "emb_size": params["emb_size"],
-            "dropout": params["out_dropout"],
+            "dropout": params["dropout"],
             "dev_PPL": results["best_ppl"],
             "test_PPL": results["final_ppl"],
             "notes": ""
         })
-
-# Generates and saves training loss and validation perplexity plots          
-def plot_data(configs, results, plots_path):
-    os.makedirs(plots_path, exist_ok=True)
-    sns.set_style("whitegrid")
-    sns.set_palette("muted")
-
-    config_name = get_config(configs)
-
-    # Loss plot
-    plt.figure(figsize=(10, 5))
-    plt.plot(results["sampled_epochs"], results["losses_train"], label="Train Loss", marker='o', linestyle='-', linewidth=2, markersize=6)
-    plt.plot(results["sampled_epochs"], results["losses_dev"], label="Dev Loss", marker='s', linestyle='--', linewidth=2, markersize=6)
-    plt.title(f"{config_name} - Training Loss Over Epochs", fontsize=16, fontweight='bold')
-    plt.xlabel("Epoch", fontsize=14)
-    plt.ylabel("Loss", fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(visible=True, which='both', linestyle='--', linewidth=0.5)
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_path, f"{config_name}_loss.png"), dpi=300)
-    plt.close()
-
-    # Validation perplexity plot
-    plt.figure(figsize=(10, 5))
-    plt.plot(results["sampled_epochs"], results["ppls_dev"], label="Dev PPL", marker='o', linestyle='-', linewidth=2, markersize=6)
-    plt.axhline(y=250, linewidth=1.5, color='gray', linestyle='--', label='Reference PPL')
-    plt.title(f"{config_name} - Validation Perplexity Over Epochs", fontsize=16, fontweight='bold')
-    plt.xlabel("Epoch", fontsize=14)
-    plt.ylabel("Perplexity", fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(visible=True, which='both', linestyle='--', linewidth=0.5)
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_path, f"{config_name}_perplexity.png"), dpi=300)
-    plt.close()

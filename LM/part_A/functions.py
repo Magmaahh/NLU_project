@@ -6,8 +6,6 @@ import numpy as np
 from tqdm import tqdm
 import copy
 import csv
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 from model import *
 
@@ -135,32 +133,35 @@ def init_model(lang, vocab_len, params, configs):
     return model
 
 # Loads an existing model from the provided path
-def load_model(model_path, lang, vocab_len, params, configs):
-    print("\Loading the existing model...\n")
+def load_model(model_path, lang, vocab_len, configs):
+    print("\nLoading the existing model...\n")
     saved_data = torch.load(model_path, map_location=DEVICE)
     model_state_dict = saved_data['model_state_dict']
-    saved_params = saved_data['params']
-    params.update(saved_params)
-    ref_model = init_model(model_path, lang, vocab_len, params, configs)
+    ref_params = saved_data['params']
+    ref_model = init_model(model_path, lang, vocab_len, ref_params, configs)
     ref_model.load_state_dict(model_state_dict)
 
     return ref_model
 
 # Allows the user to set the desired modality and model configuration
 def select_config(configs):
-    configs["training"] = input("Train or test mode? [train/test]: ").strip().lower() == "train"
+    mode_input = input("Train or test mode? [train/test]: ").strip().lower()
+    if mode_input not in {"train", "test"}:
+        print("Invalid input. Defaulting to test mode.")
+        mode_input = "test"
+    configs["training"] = mode_input == "train"
+
+    config_options = [
+        "Basic RNN",
+        "LSTM",
+        "LSTM + dropout",
+        "LSTM + dropout + NT-AdamW"
+    ]
     print("Choose model configuration:")
-    if configs["training"]:
-        print("0. Basic RNN") # Added just for the sake of comparison with other configs during implementation
-        print("1. LSTM")
-        print("2. LSTM + Dropout")
-        print("3. LSTM + Dropout + AdamW")
-        valid_choices = {"0", "1", "2", "3"}
-    else:
-        print("1. LSTM")
-        print("2. LSTM + Dropout")
-        print("3. LSTM + Dropout + AdamW")
-        valid_choices = {"1", "2", "3"}
+    start_idx = 0 if configs["training"] else 1
+    for idx in range(start_idx, len(config_options)):
+        print(f"{idx}. {config_options[idx]}")
+    valid_choices = {str(i) for i in range(start_idx, len(config_options))}
 
     choice = None
     while choice not in valid_choices:
@@ -199,12 +200,20 @@ def cast_value(value, to_type):
         print(f"Invalid type: expected {to_type.__name__}. Please try again.")
         return None
 
-# Allows the user to modify training hyperparameters via terminal input
-def select_params(params):
+# Prints the current parameters' values
+def print_params(params):
     print("\nCurrent parameters values:")
     for k, v in params.items():
         print(f"  {k}: {v}")
-    changing = input("\nWould you like to change any of the parameters above? [y/n]: ").strip().lower() == "y"
+
+# Allows the user to modify training hyperparameters via terminal input
+def select_params(params):
+    print_params(params)
+    choice_input = input("\nWould you like to change any of the parameters above? [y/n]: ").strip().lower()
+    if choice_input not in {"y", "n"}:
+        print("Invalid input. Defaulting to no.")
+        choice_input = "n"
+    changing = choice_input == "y"
 
     while changing:
         key = input("Enter the parameter name to change (e.g., lr, hid_size): ").strip()
@@ -216,18 +225,23 @@ def select_params(params):
             if casted_val is not None:
                 params[key] = casted_val
                 print(f"Updated '{key}' to {casted_val}\n")
+                changing = False
 
-        more = input("Change another parameter? [y/n]: ").strip().lower()
-        changing = more == "y"
+        if not changing:
+            print_params(params)
+            more = input("Change another parameter? [y/n]: ").strip().lower()
+            changing = more == "y"
 
 # Logs the training configuration and results into a CSV file
 def log_results(configs, params, results, log_path):
     log_fields = [
-            "model_config", "lr", "training_batch_size", "hid_size", 
-            "emb_size", "out_dropout", "emb_dropout", "dev_PPL", "test_PPL", "notes"
-        ]
-    
-    print("==================== Logging Results ====================")
+        "model_config", "lr", "training_batch_size", "hid_size", 
+        "emb_size", "out_dropout", "emb_dropout", "dev_PPL", "test_PPL", "notes"
+    ]
+    if not os.path.exists(log_path):
+        with open(log_path, mode="w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=log_fields)
+            writer.writeheader()
     with open(log_path, mode="a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=log_fields)
         writer.writerow({
@@ -242,37 +256,3 @@ def log_results(configs, params, results, log_path):
             "test_PPL": results["final_ppl"],
             "notes": ""
         })
-
-# Generates and saves training loss and validation perplexity plots          
-def plot_data(configs, results, plots_path):
-    os.makedirs(plots_path, exist_ok=True)
-    sns.set_style("whitegrid")
-    sns.set_palette("muted")
-
-    config_name = get_config(configs)
-
-    # Loss plot
-    plt.figure(figsize=(10, 5))
-    plt.plot(results["sampled_epochs"], results["losses_train"], label="Train Loss", marker='o', linestyle='-', linewidth=2, markersize=6)
-    plt.plot(results["sampled_epochs"], results["losses_dev"], label="Dev Loss", marker='s', linestyle='--', linewidth=2, markersize=6)
-    plt.title(f"{config_name} - Training Loss Over Epochs", fontsize=16, fontweight='bold')
-    plt.xlabel("Epoch", fontsize=14)
-    plt.ylabel("Loss", fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(visible=True, which='both', linestyle='--', linewidth=0.5)
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_path, f"{config_name}_loss.png"), dpi=300)
-    plt.close()
-
-    # Validation perplexity plot
-    plt.figure(figsize=(10, 5))
-    plt.plot(results["sampled_epochs"], results["ppls_dev"], label="Dev PPL", marker='o', linestyle='-', linewidth=2, markersize=6)
-    plt.axhline(y=250, linewidth=1.5, color='gray', linestyle='--', label='Reference PPL')
-    plt.title(f"{config_name} - Validation Perplexity Over Epochs", fontsize=16, fontweight='bold')
-    plt.xlabel("Epoch", fontsize=14)
-    plt.ylabel("Perplexity", fontsize=14)
-    plt.legend(fontsize=12)
-    plt.grid(visible=True, which='both', linestyle='--', linewidth=0.5)
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_path, f"{config_name}_perplexity.png"), dpi=300)
-    plt.close()

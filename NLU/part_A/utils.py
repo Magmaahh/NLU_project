@@ -1,10 +1,12 @@
 import torch
 import torch.utils.data as data
+from torch.utils.data import DataLoader
 import json
 import os
 from sklearn.model_selection import train_test_split
 from collections import Counter
 
+# Device settings
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
 
@@ -118,3 +120,77 @@ def load_data(path):
     with open(path) as f:
         dataset = json.loads(f.read())
     return dataset
+
+def create_raws(tmp_train_raw):
+    labels = []
+    inputs = []
+    mini_train = []
+
+    intents = [x['intent'] for x in tmp_train_raw]
+    count_y = Counter(intents)
+    portion = 0.10
+
+    for id_y, y in enumerate(intents):
+        if count_y[y] > 1: 
+            inputs.append(tmp_train_raw[id_y])
+            labels.append(y)
+        else:
+            mini_train.append(tmp_train_raw[id_y])
+    
+    X_train, X_dev, _, _ = train_test_split(inputs, labels, test_size=portion, 
+                                                        random_state=42, 
+                                                        shuffle=True,
+                                                        stratify=labels)
+    X_train.extend(mini_train)
+    train_raw = X_train
+    dev_raw = X_dev
+
+    return train_raw, dev_raw
+
+# Creates dataset objects from raw data
+def create_datasets(train_raw, dev_raw, test_raw, lang):
+    train_dataset = IntentsAndSlots(train_raw, lang)
+    dev_dataset = IntentsAndSlots(dev_raw, lang)
+    test_dataset = IntentsAndSlots(test_raw, lang)
+
+    return train_dataset, dev_dataset, test_dataset
+
+# Creates DataLoader objects with padding and batching
+def create_dataloaders(train_dataset, dev_dataset, test_dataset, train_batch_size):
+    train_loader = DataLoader(train_dataset, train_batch_size, collate_fn=collate_fn,  shuffle=True)
+    dev_loader = DataLoader(dev_dataset, batch_size=64, collate_fn=collate_fn)
+    test_loader = DataLoader(test_dataset, batch_size=64, collate_fn=collate_fn)
+                             
+    return train_loader, dev_loader, test_loader
+
+# Prepares raw data, vocabulary, datasets and dataloaders
+def prepare_data(train_path, test_path, model_path, params, configs):
+    # Extract raw data and create raw validation set
+    tmp_train_raw = load_data(train_path)
+    test_raw = load_data(test_path)
+    train_raw, dev_raw = create_raws(tmp_train_raw)
+
+    # Create the vocabulary
+    words = sum([x['utterance'].split() for x in train_raw], [])                                                      
+    corpus = train_raw + dev_raw + test_raw
+    slots = set(sum([line['slots'].split() for line in corpus],[]))
+    intents = set([line['intent'] for line in corpus])
+    lang = Lang(words, intents, slots, cutoff=0)
+
+    if not configs['training']:
+        saved_data = torch.load(model_path, map_location=DEVICE)
+        lang.word2id = saved_data['w2id']
+        lang.slot2id = saved_data['slot2id']
+        lang.intent2id = saved_data['intent2id']
+
+    out_slot = len(lang.slot2id)
+    out_int = len(lang.intent2id)
+    vocab_len = len(lang.word2id)
+    
+    # Create the datasets
+    train_dataset, dev_dataset, test_dataset = create_datasets(train_raw, dev_raw, test_raw, lang)
+
+    # create the dataloaders
+    train_loader, dev_loader, test_loader = create_dataloaders(train_dataset, dev_dataset, test_dataset, params["tr_batch_size"])
+
+    return train_loader, dev_loader, test_loader, lang, out_slot, out_int, vocab_len

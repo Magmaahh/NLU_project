@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 class ModelIAS(nn.Module):
-    def __init__(self, hid_size, out_slot, out_int, emb_size, vocab_len, dropout, bidirectional, apply_dropout, n_layer=1, pad_index=0):
+    def __init__(self, hid_size, emb_size, out_slot, out_int, vocab_len, dropout, bidirectional, apply_dropout, n_layer=1, pad_index=0):
         super(ModelIAS, self).__init__()
         self.apply_dropout = apply_dropout
         self.bidirectional = bidirectional

@@ -1,0 +1,5 @@
+model_config,lr,training_batch_size,hid_size,emb_size,dropout,dev_PPL,test_PPL,notes
+LSTM + weight tying,1,64,200,300,0.1,129.18243099839484,125.69335887161046,
+LSTM + weight tying + variational dropout,1,64,200,300,0.1,117.81833276474978,118.2526963659816,
+LSTM + weight tying + variational dropout,1,64,200,300,0.3,112.2760359177511,114.09056265576842,
+LSTM + weight tying + variational dropout + NT-AvSGD,1,64,200,300,0.3,inf,96.72912183239953,

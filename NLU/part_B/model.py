@@ -20,6 +20,7 @@ class BERTmodel(BertPreTrainedModel):
            
         slots = self.slots_out(sequence_out)
         slots = slots.permute(0, 2, 1)
+        
         intent = self.int_out(cls_out)
 
         return slots, intent

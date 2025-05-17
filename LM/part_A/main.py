@@ -1,6 +1,6 @@
 import torch.optim as optim
 
-from utils import *
+from utils import prepare_data
 from functions import *
 
 # Paths settings
@@ -9,7 +9,6 @@ DEV_DATA_PATH = "dataset/ptb.valid.txt"
 TEST_DATA_PATH = "dataset/ptb.test.txt"
 MODELS_PATH = "bin"
 LOG_PATH = "experiment_log.csv"
-PLOTS_PATH = "plots"
 
 # Default configuration settings
 configs = {
@@ -33,15 +32,15 @@ params = {
 }
 
 if __name__ == "__main__":
-    # Prepare data
-    train_loader, dev_loader, test_loader, lang, vocab_len = prepare_data(
-        TRAIN_DATA_PATH, DEV_DATA_PATH, TEST_DATA_PATH, params
-    )
-
     # Select mode and model
     select_config(configs)
     model_filename = f"{get_config(configs)}.pt"
     model_path = os.path.join(MODELS_PATH, model_filename)
+
+    # Prepare data
+    train_loader, dev_loader, test_loader, lang, vocab_len = prepare_data(
+        TRAIN_DATA_PATH, DEV_DATA_PATH, TEST_DATA_PATH, params
+    )
 
     # Define the loss functions
     criterion_train = nn.CrossEntropyLoss(ignore_index=lang.word2id["<pad>"])
@@ -62,40 +61,22 @@ if __name__ == "__main__":
             criterion_train, criterion_eval, optimizer, params
         )
 
-        # Compare the model with the existing one (if saved) and replace this if better
-        save_model = True
-        if os.path.exists(model_path):
-            # Load the existing model
-            ref_model = load_model(model_path, lang, vocab_len, params, configs)
+        # Save the model
+        os.makedirs(MODELS_PATH, exist_ok=True)
+        model_data = {
+            'model_state_dict': results["best_model"].state_dict(),
+            'params': params
+        }
+        torch.save(model_data, model_path)
+        print(f"Saved model and hyperparameters as {model_filename}\n")
 
-            # Evaluate the existing model performances
-            ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)
-            
-            # Compare the models
-            print(f"Comparing models...\nExisting model PPL: {ref_ppl:.2f}")
-            if ref_ppl <= results["final_ppl"]:
-                save_model = False
-                print("Existing model is better or equal. Keeping it.\n")
-            else:
-                print(f"New model has lower test PPL ({results['final_ppl']:.2f} < {ref_ppl:.2f}). Replacing the model.\n")
-
-        if save_model: 
-            # Save the model
-            model_data = {
-                'model_state_dict': results["best_model"].state_dict(),
-                'params': params
-            }
-            torch.save(model_data, model_path)
-            print(f"Saved model and hyperparameters as {model_filename}\n")
-
-        # Log and plot results
+        # Log results
         log_results(configs, params, results, LOG_PATH)
-        plot_data(configs, results, PLOTS_PATH)
 
     else: # Testing mode
         if os.path.exists(model_path): # Test the existing model
             # Load the existing model
-            ref_model = load_model(model_path, lang, vocab_len, params, configs)
+            ref_model = load_model(model_path, lang, vocab_len, configs)
 
             # Evaluate the existing model performances
             ref_ppl, _ = eval_loop(test_loader, criterion_eval, ref_model)

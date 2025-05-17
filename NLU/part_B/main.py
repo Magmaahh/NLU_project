@@ -106,7 +106,7 @@ if __name__ == "__main__":
                 if x % 5 == 0: 
                     sampled_epochs.append(x)
                     losses_train.append(np.asarray(loss).mean())
-                    results_dev, intent_res, loss_dev = eval_loop(dev_loader, criterion_slots, criterion_intents, model, lang, bert_model, testing=False)
+                    results_dev, intent_res, loss_dev = eval_loop(dev_loader, criterion_slots, criterion_intents, model, lang, bert_model)
                     losses_dev.append(np.asarray(loss_dev).mean())
                     
                     f1 = results_dev['total']['f']
@@ -120,7 +120,7 @@ if __name__ == "__main__":
                         break 
             
         best_model.to(DEVICE)
-        results_test, intent_test, _ = eval_loop(test_loader, criterion_slots, criterion_intents, best_model, lang, bert_model, testing=True)   
+        results_test, intent_test, _ = eval_loop(test_loader, criterion_slots, criterion_intents, best_model, lang, bert_model)   
         intent_acc.append(intent_test['accuracy'])
         slot_f1s.append(results_test['total']['f']) 
             
@@ -162,5 +162,3 @@ if __name__ == "__main__":
                     "slot2id": lang.slot2id, 
                     "intent2id": lang.intent2id}
     torch.save(saving_object, MODEL_PATH)
-    
-    plot_data(model_id, sampled_epochs, losses_train, losses_dev)
