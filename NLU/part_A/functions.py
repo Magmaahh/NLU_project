@@ -8,6 +8,7 @@ import copy
 from conll import evaluate
 from sklearn.metrics import classification_report
 import csv
+import matplotlib.pyplot as plt
 
 from model import *
 from utils import PAD_TOKEN
@@ -89,10 +90,16 @@ def eval_loop(data, criterion_slots, criterion_intents, model, lang):
 def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, vocab_len, criterion_slots, criterion_intents, params, configs):
     results = {
         "best_model": None,
+        "losses_train_avg": [],
+        "losses_train_std": [],
+        "losses_dev_avg": [],
+        "losses_dev_std": [],
+        "sampled_epochs": [],
         "slot_f1": 0,
         "int_acc": 0
     }
     slot_f1s, intent_acc, best_models = [], [], []
+    all_losses_train, all_losses_dev, all_sampled_epochs = [], [], []
 
     for run in tqdm(range(0, params["runs"])):
         model = init_model(out_slot, out_int, vocab_len, params, configs)
@@ -129,12 +136,27 @@ def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, 
         intent_acc.append(intent_test['accuracy'])
         slot_f1s.append(results_test['total']['f'])
         best_models.append((best_model, best_f1))
-            
+        all_losses_train.append(losses_train)
+        all_losses_dev.append(losses_dev)
+        all_sampled_epochs.append(sampled_epochs)
+
+    # Compute and store mean and std for training and validation losses
+    losses_train_arr = np.array(all_losses_train)
+    losses_dev_arr = np.array(all_losses_dev)
+
+    results["sampled_epochs"] = all_sampled_epochs[0]
+    results["losses_train_avg"] = losses_train_arr.mean(axis=0)
+    results["losses_dev_std"] = losses_train_arr.std(axis=0)
+    results["losses_dev_avg"] = losses_dev_arr.mean(axis=0)
+    results["losses_dev_std"] = losses_dev_arr.std(axis=0)
+
+    # Compute and store mean for slot_f1s and intent accuracy
     slot_f1s = np.asarray(slot_f1s)
     intent_acc = np.asarray(intent_acc)
 
     results["slot_f1"] = round(slot_f1s.mean(),3)
     results["int_acc"] = round(intent_acc.mean(), 3)
+
     best_model, _ = max(best_models, key=lambda x: x[1])
     results["best_model"] = copy.deepcopy(best_model).to('cpu')
 
@@ -142,7 +164,6 @@ def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, 
     print('Intent Acc', results['int_acc'], '+-', round(slot_f1s.std(), 3))
 
     return results
-
 
 # Initializes the weights of the model layers
 def init_weights(mat):
@@ -289,5 +310,68 @@ def log_results(configs, params, results, log_path):
             "dropout": params["dropout"],
             "slot_f1": results["slot_f1"],
             "int_accuracy": results["int_acc"],
+            "notes": ""
+        })
+
+# Logs and plots training results
+def log_and_plot_results(configs, params, results, log_path, plot_path):
+    # Create a unique experiment ID based on config count
+    config = get_config(configs)
+    config_count = 0
+    if os.path.exists(log_path):
+        with open(log_path, mode="r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row["model_config"] == config:
+                    config_count += 1
+
+    # Plot and save training results
+    os.makedirs(plot_path, exist_ok=True)
+    config_id = f"{config}_v{config_count + 1}"
+    plot_filename = f"{config_id}_loss_plot.png"
+    plot_filepath = os.path.join(plot_path, plot_filename)
+
+    epochs = results["sampled_epochs"]
+    mean_train = np.array(results["losses_train_avg"])
+    std_train = np.array(results["losses_train_std"])
+    mean_dev = np.array(results["losses_dev_avg"])
+    std_dev = np.array(results["losses_dev_std"])
+
+    plt.figure()
+    plt.plot(epochs, mean_train, label="Training Loss (mean)", color="blue")
+    plt.fill_between(epochs, mean_train - std_train, mean_train + std_train, alpha=0.2, color="blue")
+    plt.plot(epochs, mean_dev, label="Dev Loss (mean)", color="orange")
+    plt.fill_between(epochs, mean_dev - std_dev, mean_dev + std_dev, alpha=0.2, color="orange")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training and Dev Loss (Mean ± Std) over Epochs")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(plot_filepath)
+    plt.close()
+
+    # Log ans save training results
+    log_fields = [
+        "experiment_id", "model_config", "lr", "training_batch_size", "hid_size", 
+        "emb_size", "dropout", "slot_f1", "int_accuracy", "overall_score", "notes"
+    ]
+    if not os.path.exists(log_path):
+        with open(log_path, mode="w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=log_fields)
+            writer.writeheader()
+    with open(log_path, mode="a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=log_fields)
+        writer.writerow({
+            "experiment_id": config_id,
+            "model_config": get_config(configs),
+            "lr": params["lr"],
+            "training_batch_size": params["tr_batch_size"],
+            "hid_size": params["hid_size"],
+            "emb_size": params["emb_size"],
+            "dropout": params["dropout"],
+            "slot_f1": results["slot_f1"],
+            "int_accuracy": results["int_acc"],
+            "overall_score": results["slot_f1"] + results["int_acc"],
             "notes": ""
         })

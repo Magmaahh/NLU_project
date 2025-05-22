@@ -5,7 +5,8 @@ from functions import *
 TRAIN_DATA_PATH = "dataset/train.json"
 TEST_DATA_PATH = "dataset/test.json"
 MODELS_PATH = "bin"
-LOG_PATH = "experiment_log.csv"
+LOG_PATH = "testing_results/experiments_log.csv"
+PLOT_PATH = "testing_results/plots"
 
 # Default training hyperparameters
 params = {
@@ -53,8 +54,8 @@ if __name__ == "__main__":
         torch.save(model_data, model_path)
         print(f"Saved model data as {model_filename}\n")
 
-        # Log results
-        log_results(params, results, LOG_PATH)
+        # Log and plot results
+        log_and_plot_results(params, results, LOG_PATH, PLOT_PATH)
 
     else: # Testing mode
         if os.path.exists(model_path):

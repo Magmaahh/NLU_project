@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import math
+import matplotlib.pyplot as plt
 import os
 import numpy as np
 from tqdm import tqdm
@@ -286,10 +287,39 @@ def select_params(params):
             more = input("Change another parameter? [y/n]: ").strip().lower()
             changing = more == "y"
 
-# Logs the training configuration and results into a CSV file
-def log_results(configs, params, results, log_path):
+# Logs and plots training results
+def log_and_plot_results(configs, params, results, log_path, plot_path):
+    # Create a unique experiment ID based on config count
+    config = get_config(configs)
+    config_count = 0
+    if os.path.exists(log_path):
+        with open(log_path, mode="r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row["model_config"] == config:
+                    config_count += 1
+
+    # Plot and save training results
+    os.makedirs(plot_path, exist_ok=True)
+    config_id = f"{config}_v{config_count + 1}"
+    plot_filename = f"{config_id}_loss_plot.png"
+    plot_filepath = os.path.join(plot_path, plot_filename)
+    
+    plt.figure()
+    plt.plot(results["sampled_epochs"], results["losses_train"], label="Training Loss", marker="o")
+    plt.plot(results["sampled_epochs"], results["losses_dev"], label="Dev Loss", marker="x")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training and Dev Loss over Epochs")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(plot_filepath)
+    plt.close()
+
+    # Log and save training results
     log_fields = [
-        "model_config", "lr", "training_batch_size", "hid_size", 
+        "experiment_id", "model_config", "lr", "training_batch_size", "hid_size", 
         "emb_size", "dropout", "dev_PPL", "test_PPL", "notes"
     ]
     if not os.path.exists(log_path):
@@ -299,7 +329,8 @@ def log_results(configs, params, results, log_path):
     with open(log_path, mode="a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=log_fields)
         writer.writerow({
-            "model_config": get_config(configs),
+            "experiment_id": config_id,
+            "model_config": config,
             "lr": params["lr"],
             "training_batch_size": params["tr_batch_size"],
             "hid_size": params["hid_size"],

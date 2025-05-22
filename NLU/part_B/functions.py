@@ -8,6 +8,7 @@ import copy
 import torch.optim as optim
 from conll import evaluate
 from sklearn.metrics import classification_report
+import matplotlib.pyplot as plt
 from transformers import AutoTokenizer, BertConfig
 
 from model import *
@@ -99,10 +100,16 @@ def eval_loop(data, criterion_slots, criterion_intents, model, lang):
 def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, criterion_slots, criterion_intents, params):
     results = {
         "best_model": None,
+        "losses_train_avg": [],
+        "losses_train_std": [],
+        "losses_dev_avg": [],
+        "losses_dev_std": [],
+        "sampled_epochs": [],
         "slot_f1": 0,
         "int_acc": 0
     }
     slot_f1s, intent_acc, best_models = [], [], []
+    all_losses_train, all_losses_dev, all_sampled_epochs = [], [], []
     
     bert_config = BertConfig.from_pretrained("bert-base-uncased")
     
@@ -141,17 +148,32 @@ def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, 
         intent_acc.append(intent_test['accuracy'])
         slot_f1s.append(results_test['total']['f'])
         best_models.append((best_model, best_f1))
+        all_losses_train.append(losses_train)
+        all_losses_dev.append(losses_dev)
+        all_sampled_epochs.append(sampled_epochs)
             
+    # Compute and store mean and std for training and validation losses
+    losses_train_arr = np.array(all_losses_train)
+    losses_dev_arr = np.array(all_losses_dev)
+
+    results["sampled_epochs"] = all_sampled_epochs[0]
+    results["losses_train_avg"] = losses_train_arr.mean(axis=0)
+    results["losses_dev_std"] = losses_train_arr.std(axis=0)
+    results["losses_dev_avg"] = losses_dev_arr.mean(axis=0)
+    results["losses_dev_std"] = losses_dev_arr.std(axis=0)
+
+    # Compute and store mean for slot_f1s and intent accuracy
     slot_f1s = np.asarray(slot_f1s)
     intent_acc = np.asarray(intent_acc)
 
     results["slot_f1"] = round(slot_f1s.mean(),3)
     results["int_acc"] = round(intent_acc.mean(), 3)
+
     best_model, _ = max(best_models, key=lambda x: x[1])
     results["best_model"] = copy.deepcopy(best_model).to('cpu')
 
-    print('Slot F1', round(slot_f1s.mean(),3), '+-', round(slot_f1s.std(),3))
-    print('Intent Acc', round(intent_acc.mean(), 3), '+-', round(slot_f1s.std(), 3))
+    print('Slot F1', results['slot_f1'], '+-', round(slot_f1s.std(),3))
+    print('Intent Acc', results['int_acc'], '+-', round(slot_f1s.std(), 3))
 
     return results
 
@@ -236,10 +258,47 @@ def select_params(params):
             more = input("Change another parameter? [y/n]: ").strip().lower()
             changing = more == "y"
 
-# Logs the training configuration and results into a CSV file
-def log_results(params, results, log_path):
+# Logs and plots training results
+def log_and_plot_results(params, results, log_path, plot_path):
+    # Create a unique experiment ID based on config count
+    config = "bert-base-uncased"
+    config_count = 0
+    if os.path.exists(log_path):
+        with open(log_path, mode="r") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row["model_type"] == config:
+                    config_count += 1
+
+    # Plot and save training results
+    os.makedirs(plot_path, exist_ok=True)
+    config_id = f"{config}_v{config_count + 1}"
+    plot_filename = f"{config_id}_loss_plot.png"
+    plot_filepath = os.path.join(plot_path, plot_filename)
+
+    epochs = results["sampled_epochs"]
+    mean_train = np.array(results["losses_train_avg"])
+    std_train = np.array(results["losses_train_std"])
+    mean_dev = np.array(results["losses_dev_avg"])
+    std_dev = np.array(results["losses_dev_std"])
+
+    plt.figure()
+    plt.plot(epochs, mean_train, label="Training Loss (mean)", color="blue")
+    plt.fill_between(epochs, mean_train - std_train, mean_train + std_train, alpha=0.2, color="blue")
+    plt.plot(epochs, mean_dev, label="Dev Loss (mean)", color="orange")
+    plt.fill_between(epochs, mean_dev - std_dev, mean_dev + std_dev, alpha=0.2, color="orange")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training and Dev Loss (Mean ± Std) over Epochs")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(plot_filepath)
+    plt.close()
+
+    # Log ans save training results
     log_fields = [
-        "model_type", "lr", "training_batch_size", "dropout", "slot_f1", "int_accuracy", "notes"
+        "experiment_id", "model_type", "lr", "training_batch_size", "dropout", "slot_f1", "int_accuracy", "overall_score", "notes"
     ]
     if not os.path.exists(log_path):
         with open(log_path, mode="w", newline="") as f:
@@ -248,11 +307,13 @@ def log_results(params, results, log_path):
     with open(log_path, mode="a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=log_fields)
         writer.writerow({
-            "model_type": "bert-base-uncased",
+            "experiment_id": config_id,
+            "model_type": config,
             "lr": params["lr"],
             "training_batch_size": params["tr_batch_size"],
             "dropout": params["dropout"],
             "slot_f1": results["slot_f1"],
             "int_accuracy": results["int_acc"],
+            "overall_score": results["slot_f1"] + results["int_acc"],
             "notes": ""
         })

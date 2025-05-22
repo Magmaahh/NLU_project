@@ -8,7 +8,8 @@ TRAIN_DATA_PATH = "dataset/ptb.train.txt"
 DEV_DATA_PATH = "dataset/ptb.valid.txt"
 TEST_DATA_PATH = "dataset/ptb.test.txt"
 MODELS_PATH = "bin"
-LOG_PATH = "experiment_log.csv"
+LOG_PATH = "testing_results/experiments_log.csv"
+PLOT_PATH = "testing_results/plots"
 
 # Default configuration settings
 configs = {
@@ -69,8 +70,8 @@ if __name__ == "__main__":
         torch.save(model_data, model_path)
         print(f"Saved model and hyperparameters as {model_filename}\n")
 
-        # Log results
-        log_results(configs, params, results, LOG_PATH)
+        # Log and plot results
+        log_and_plot_results(configs, params, results, LOG_PATH, PLOT_PATH)
 
     else: # Testing mode
         if os.path.exists(model_path):
