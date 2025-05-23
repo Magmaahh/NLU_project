@@ -181,29 +181,32 @@ def create_dataloaders(train_dataset, dev_dataset, test_dataset, train_batch_siz
 
 # Prepares raw data, vocabulary, datasets and dataloaders
 def prepare_data(train_path, test_path, model_path, params, training):
-    # Extract raw data and create raw validation set
     tmp_train_raw = load_data(train_path)
     test_raw = load_data(test_path)
     train_raw, dev_raw = create_raws(tmp_train_raw)
 
-    # Create the vocabulary                                                 
-    corpus = train_raw + dev_raw + test_raw
-    slots = set(sum([line['slots'].split() for line in corpus],[]))
-    intents = set([line['intent'] for line in corpus])
-    lang = Lang(intents, slots, cutoff=0)
-
-    if not training:
-        saved_data = torch.load(model_path, map_location=DEVICE)
-        lang.slot2id = saved_data['slot2id']
-        lang.intent2id = saved_data['intent2id']
+    if training:                                                  
+        corpus = train_raw + dev_raw + test_raw
+        slots = set(sum([line['slots'].split() for line in corpus],[]))
+        intents = set([line['intent'] for line in corpus])
+        lang = Lang(intents, slots, cutoff=0)
+    else:
+        if os.path.exists(model_path):
+            saved_data = torch.load(model_path, map_location=DEVICE)
+            lang = Lang([], [], cutoff=0)
+            lang.slot2id = saved_data['slot2id']
+            lang.intent2id = saved_data['intent2id']
+            lang.id2slot = {v: k for k, v in lang.slot2id.items()}
+            lang.id2intent = {v: k for k, v in lang.intent2id.items()}
+        else:
+            print(f"Error: No model for the selected config is saved. Exiting.")
+            exit(1)
 
     out_slot = len(lang.slot2id)
     out_int = len(lang.intent2id)
-    
-    # Create the datasets
-    train_dataset, dev_dataset, test_dataset = create_datasets(train_raw, dev_raw, test_raw, lang)
 
-    # create the dataloaders
+    # Create datasets and loaders
+    train_dataset, dev_dataset, test_dataset = create_datasets(train_raw, dev_raw, test_raw, lang)
     train_loader, dev_loader, test_loader = create_dataloaders(train_dataset, dev_dataset, test_dataset, params["tr_batch_size"])
 
     return train_loader, dev_loader, test_loader, lang, out_slot, out_int

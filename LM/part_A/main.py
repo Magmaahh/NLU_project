@@ -21,11 +21,11 @@ configs = {
 
 # Default training hyperparameters
 params = {
-    "lr": 0.0001,
+    "lr": 0.1,
     "hid_size": 200,
     "emb_size": 300,
-    "out_dropout": 0.3,
-    "emb_dropout": 0.3,
+    "out_dropout": 0.1,
+    "emb_dropout": 0.1,
     "tr_batch_size": 64,
     "clip": 5,
     "n_epochs": 100,
@@ -54,7 +54,10 @@ if __name__ == "__main__":
         # Iniziatilize the model
         model = init_model(lang, vocab_len, params, configs)
         model.apply(init_weights)
-        optimizer = optim.AdamW(model.parameters(), lr=params["lr"]) if configs["use_adamw"] else optim.SGD(model.parameters(), lr=params["lr"])
+        if configs["use_adamw"]:
+            optimizer = optim.AdamW(model.parameters(), lr=params["lr"])
+        else:
+            optimizer = optim.SGD(model.parameters(), lr=params["lr"])
 
         # Train the model
         results = train_model(

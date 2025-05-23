@@ -15,7 +15,6 @@ class BERTmodel(BertPreTrainedModel):
     def forward(self, input_ids, attention_mask):
         output = self.bert(input_ids=input_ids, attention_mask=attention_mask)
         sequence_out = output.last_hidden_state
-        #cls_out = output.last_hidden_state[:, 0, :]
         cls_out = output.pooler_output
 
         # Apply dropout

@@ -11,11 +11,11 @@ PLOT_PATH = "testing_results/plots"
 # Default training hyperparameters
 params = {
     "lr": 0.00005,
-    "dropout": 0.1,
+    "dropout": 0.3,
     "tr_batch_size": 128,
     "clip": 5,
     "patience_init": 3,
-    "n_epochs": 40,
+    "n_epochs": 65,
     "runs": 5
 }
 
@@ -55,20 +55,17 @@ if __name__ == "__main__":
         print(f"Saved model data as {model_filename}\n")
 
         # Log and plot results
-        log_and_plot_results(params, results, LOG_PATH, PLOT_PATH)
+        log_results(params, results, LOG_PATH)
+        plot_results(results, LOG_PATH, PLOT_PATH)
 
     else: # Testing mode
-        if os.path.exists(model_path):
-            # Load the existing model
-            ref_model = load_model_data(model_path, out_int, out_slot)
+        # Load the existing model
+        ref_model = load_model_data(model_path, out_int, out_slot)
 
-            # Evaluate the existing model performances
-            ref_results, ref_intent, _ = eval_loop(test_loader, criterion_slots, criterion_intents, ref_model, lang)
+        # Evaluate the existing model performances
+        ref_results, ref_intent, _ = eval_loop(test_loader, criterion_slots, criterion_intents, ref_model, lang)
 
-            # Show results
-            print("\n==================== Test Results ====================")
-            print(f"Results on test set: slot f1 {ref_results['total']['f']}, intent accuracy {ref_intent['accuracy']}")
-            print("=====================================================\n")
-        else:
-            print(f"\nError: Model {model_filename} not found. Exiting.")
-            exit(1)
+        # Show results
+        print("\n==================== Test Results ====================")
+        print(f"Results on test set: slot f1 {ref_results['total']['f']}, intent accuracy {ref_intent['accuracy']}")
+        print("=====================================================\n")

@@ -100,16 +100,13 @@ def eval_loop(data, criterion_slots, criterion_intents, model, lang):
 def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, criterion_slots, criterion_intents, params):
     results = {
         "best_model": None,
-        "losses_train_avg": [],
-        "losses_train_std": [],
-        "losses_dev_avg": [],
-        "losses_dev_std": [],
-        "sampled_epochs": [],
         "slot_f1": 0,
-        "int_acc": 0
+        "int_acc": 0,
+        "losses_dev": [],
+        "losses_train": [],
+        "sampled_epochs": [],
     }
     slot_f1s, intent_acc, best_models = [], [], []
-    all_losses_train, all_losses_dev, all_sampled_epochs = [], [], []
     
     bert_config = BertConfig.from_pretrained("bert-base-uncased")
     
@@ -148,19 +145,12 @@ def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, 
         intent_acc.append(intent_test['accuracy'])
         slot_f1s.append(results_test['total']['f'])
         best_models.append((best_model, best_f1))
-        all_losses_train.append(losses_train)
-        all_losses_dev.append(losses_dev)
-        all_sampled_epochs.append(sampled_epochs)
-            
-    # Compute and store mean and std for training and validation losses
-    losses_train_arr = np.array(all_losses_train)
-    losses_dev_arr = np.array(all_losses_dev)
+        results["losses_dev"].append(losses_dev)
+        results["losses_train"].append(losses_train)
+        results["sampled_epochs"].append(sampled_epochs)
 
-    results["sampled_epochs"] = all_sampled_epochs[0]
-    results["losses_train_avg"] = losses_train_arr.mean(axis=0)
-    results["losses_dev_std"] = losses_train_arr.std(axis=0)
-    results["losses_dev_avg"] = losses_dev_arr.mean(axis=0)
-    results["losses_dev_std"] = losses_dev_arr.std(axis=0)
+        print('Slot F1', results_test['total']['f'])
+        print('Intent Acc', intent_test['accuracy'])
 
     # Compute and store mean for slot_f1s and intent accuracy
     slot_f1s = np.asarray(slot_f1s)
@@ -258,47 +248,55 @@ def select_params(params):
             more = input("Change another parameter? [y/n]: ").strip().lower()
             changing = more == "y"
 
-# Logs and plots training results
-def log_and_plot_results(params, results, log_path, plot_path):
-    # Create a unique experiment ID based on config count
+# Creates a unique experiment ID based on config count in the log file
+def get_experiment_id(log_path):
     config = "bert-base-uncased"
     config_count = 0
     if os.path.exists(log_path):
         with open(log_path, mode="r") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row["model_type"] == config:
+                if row["model_config"] == config:
                     config_count += 1
 
-    # Plot and save training results
-    os.makedirs(plot_path, exist_ok=True)
     config_id = f"{config}_v{config_count + 1}"
-    plot_filename = f"{config_id}_loss_plot.png"
-    plot_filepath = os.path.join(plot_path, plot_filename)
 
-    epochs = results["sampled_epochs"]
-    mean_train = np.array(results["losses_train_avg"])
-    std_train = np.array(results["losses_train_std"])
-    mean_dev = np.array(results["losses_dev_avg"])
-    std_dev = np.array(results["losses_dev_std"])
+    return config_id
 
-    plt.figure()
-    plt.plot(epochs, mean_train, label="Training Loss (mean)", color="blue")
-    plt.fill_between(epochs, mean_train - std_train, mean_train + std_train, alpha=0.2, color="blue")
-    plt.plot(epochs, mean_dev, label="Dev Loss (mean)", color="orange")
-    plt.fill_between(epochs, mean_dev - std_dev, mean_dev + std_dev, alpha=0.2, color="orange")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.title("Training and Dev Loss (Mean ± Std) over Epochs")
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(plot_filepath)
-    plt.close()
+# Plots training results
+def plot_results(results, log_path, plot_path):
+    # Get the experiment id and make a subfolder for plots
+    config_id = get_experiment_id(log_path)
+    folder_name = os.path.join(plot_path, config_id)
+    os.makedirs(folder_name, exist_ok=True)
 
-    # Log ans save training results
+    # Plot one graph per run
+    for run_idx, (epochs, train_losses, dev_losses) in enumerate(
+        zip(results["sampled_epochs"], results["losses_train"], results["losses_dev"])
+    ):
+        plt.figure()
+        plt.plot(epochs, train_losses, label="Training Loss", marker="o")
+        plt.plot(epochs, dev_losses, label="Dev Loss", marker="x")
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title(f"Run {run_idx + 1}: Training and Dev Loss")
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        
+        filename = f"{config_id}_run_{run_idx + 1}.png"
+        filepath = os.path.join(folder_name, filename)
+        plt.savefig(filepath)
+        plt.close()
+
+# Logs training results
+def log_results(params, results, log_path):
+    # Get the experiment id
+    config_id = get_experiment_id(log_path)
+
+    # Log and save training results
     log_fields = [
-        "experiment_id", "model_type", "lr", "training_batch_size", "dropout", "slot_f1", "int_accuracy", "overall_score", "notes"
+        "experiment_id", "model_type", "lr", "training_batch_size", "dropout", "slot_f1", "int_accuracy", "notes"
     ]
     if not os.path.exists(log_path):
         with open(log_path, mode="w", newline="") as f:
@@ -308,12 +306,11 @@ def log_and_plot_results(params, results, log_path, plot_path):
         writer = csv.DictWriter(f, fieldnames=log_fields)
         writer.writerow({
             "experiment_id": config_id,
-            "model_type": config,
+            "model_type": "bert-base-uncased",
             "lr": params["lr"],
             "training_batch_size": params["tr_batch_size"],
             "dropout": params["dropout"],
             "slot_f1": results["slot_f1"],
             "int_accuracy": results["int_acc"],
-            "overall_score": results["slot_f1"] + results["int_acc"],
             "notes": ""
         })

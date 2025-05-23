@@ -21,7 +21,7 @@ configs = {
 
 # Default training hyperparameters
 params = {
-    "lr": 1,
+    "lr": 2,
     "hid_size": 200,
     "emb_size": 300,
     "dropout": 0.1,

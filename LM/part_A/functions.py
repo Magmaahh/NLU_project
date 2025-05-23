@@ -156,7 +156,7 @@ def select_config(configs):
         "Basic RNN",
         "LSTM",
         "LSTM + dropout",
-        "LSTM + dropout + NT-AdamW"
+        "LSTM + dropout + AdamW"
     ]
     print("Choose model configuration:")
     start_idx = 0 if configs["training"] else 1
