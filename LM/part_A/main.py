@@ -75,7 +75,8 @@ if __name__ == "__main__":
         print(f"Saved model and hyperparameters as {model_filename}\n")
 
         # Log and plot results
-        log_and_plot_results(configs, params, results, LOG_PATH, PLOT_PATH)
+        log_results(configs, params, results, LOG_PATH)
+        plot_results(configs, results, LOG_PATH, PLOT_PATH)
 
     else: # Testing mode
         if os.path.exists(model_path):

@@ -287,9 +287,8 @@ def select_params(params):
             more = input("Change another parameter? [y/n]: ").strip().lower()
             changing = more == "y"
 
-# Logs and plots training results
-def log_and_plot_results(configs, params, results, log_path, plot_path):
-    # Create a unique experiment ID based on config count
+# Creates a unique experiment ID based on config count in the log file
+def get_experiment_id(configs, log_path):
     config = get_config(configs)
     config_count = 0
     if os.path.exists(log_path):
@@ -298,10 +297,17 @@ def log_and_plot_results(configs, params, results, log_path, plot_path):
             for row in reader:
                 if row["model_config"] == config:
                     config_count += 1
+    config_id = f"{config}_v{config_count + 1}"
+
+    return config_id
+
+# Plots training results
+def plot_results(configs, results, log_path, plot_path):
+    # Get the experiment id
+    config_id = get_experiment_id(configs, log_path)
 
     # Plot and save training results
     os.makedirs(plot_path, exist_ok=True)
-    config_id = f"{config}_v{config_count + 1}"
     plot_filename = f"{config_id}_loss_plot.png"
     plot_filepath = os.path.join(plot_path, plot_filename)
     
@@ -317,6 +323,11 @@ def log_and_plot_results(configs, params, results, log_path, plot_path):
     plt.savefig(plot_filepath)
     plt.close()
 
+# Logs training results
+def log_results(configs, params, results, log_path):
+    # Get the experiment id
+    config_id = get_experiment_id(configs, log_path)
+
     # Log and save training results
     log_fields = [
         "experiment_id", "model_config", "lr", "training_batch_size", "hid_size", 
@@ -330,7 +341,7 @@ def log_and_plot_results(configs, params, results, log_path, plot_path):
         writer = csv.DictWriter(f, fieldnames=log_fields)
         writer.writerow({
             "experiment_id": config_id,
-            "model_config": config,
+            "model_config": get_config(configs),
             "lr": params["lr"],
             "training_batch_size": params["tr_batch_size"],
             "hid_size": params["hid_size"],
