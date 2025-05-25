@@ -30,7 +30,7 @@ if __name__ == "__main__":
         TRAIN_DATA_PATH, TEST_DATA_PATH, model_path, params, training
     )
 
-    criterion_slots = nn.CrossEntropyLoss(ignore_index=PAD_TOKEN)
+    criterion_slots = nn.CrossEntropyLoss(ignore_index=lang.pad_token)
     criterion_intents = nn.CrossEntropyLoss()
     
     if training: # Training mode

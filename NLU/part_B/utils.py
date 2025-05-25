@@ -17,6 +17,7 @@ PAD_TOKEN = 0
 # Computes and stores the vocabulary
 class Lang():
     def __init__(self, intents, slots, cutoff=0):
+        self.pad_token = PAD_TOKEN
         self.slot2id = self.lab2id(slots)
         self.intent2id = self.lab2id(intents, pad=False)
         self.id2slot = {v:k for k, v in self.slot2id.items()}
@@ -25,13 +26,13 @@ class Lang():
     def lab2id(self, elements, pad=True):
         vocab = {}
         if pad:
-            vocab['pad'] = PAD_TOKEN
+            vocab['pad'] = self.pad_token
         for elem in elements:
                 vocab[elem] = len(vocab)
         return vocab
 
 # Provides ID versions of the datasets
-class IntentsAndSlots (data.Dataset):
+class IntentsAndSlots(data.Dataset):
     def __init__(self, dataset, lang, unk='unk'):
         self.utterances = []
         self.intents = []
@@ -55,7 +56,11 @@ class IntentsAndSlots (data.Dataset):
         utt = torch.LongTensor(self.utt_ids[idx])
         slots = torch.LongTensor(self.slot_ids[idx])
         intent = self.intent_ids[idx]
-        sample = {'utterance': utt, 'slots': slots, 'intent': intent}
+        sample = {
+            'utterance': utt, 
+            'slots': slots, 
+            'intent': intent, 
+        }
         return sample
 
     def mapping_lab(self, data, mapper):
@@ -68,25 +73,25 @@ class IntentsAndSlots (data.Dataset):
 
         for utt, slots in zip(utterance_list, slot_list):
             slot_labels = slots.split()
-            encoding = self.tokenizer(utt.split(), is_split_into_words=True, return_tensors=None, truncation=True)
+            tokenized = self.tokenizer(utt.split(), is_split_into_words=True, return_tensors=None, truncation=True)
 
-            word_ids = encoding.word_ids()
-            input_ids = encoding['input_ids']
-            
+            word_ids = tokenized.word_ids()
+            input_ids = tokenized['input_ids']
+
             aligned_slot_ids = []
             previous_word_id = None
             label_id = 0
 
             for i, word_id in enumerate(word_ids):
                 if word_id is None:
-                    aligned_slot_ids.append(PAD_TOKEN)  # Special tokens like [CLS], [SEP]
+                    aligned_slot_ids.append(PAD_TOKEN)
                 elif word_id != previous_word_id:
-                    # First subtoken of a new word
+                    # First subtoken
                     aligned_slot_ids.append(mapper.get(slot_labels[label_id], PAD_TOKEN))
                     previous_word_id = word_id
                     label_id += 1
                 else:
-                    # Subsequent subtokens of the same word
+                    # Not the first subtoken of the word
                     aligned_slot_ids.append(PAD_TOKEN)
 
             utt_ids.append(input_ids)
@@ -99,33 +104,32 @@ def collate_fn(data):
     def merge(sequences, pad_token):
         lengths = [len(seq) for seq in sequences]
         max_len = 1 if max(lengths)==0 else max(lengths)
-        padded_seqs = torch.LongTensor(len(sequences),max_len).fill_(pad_token)
+        padded_seqs = torch.LongTensor(len(sequences), max_len).fill_(pad_token)
         for i, seq in enumerate(sequences):
             end = lengths[i]
             padded_seqs[i, :end] = seq
-        padded_seqs = padded_seqs.detach()
         return padded_seqs, lengths
-    
+
     data.sort(key=lambda x: len(x['utterance']), reverse=True) 
     new_item = {}
     for key in data[0].keys():
         new_item[key] = [d[key] for d in data]
     
     utts, _ = merge(new_item['utterance'], PAD_TOKEN)
-    attention_mask = torch.LongTensor([[1 if id != PAD_TOKEN else 0 for id in seq] for seq in utts])
+    att_mask = torch.LongTensor([[1 if id != PAD_TOKEN else 0 for id in seq] for seq in utts])
     y_slots, _ = merge(new_item["slots"], PAD_TOKEN)
     intent = torch.LongTensor(new_item["intent"])
     
-    utts = utts.to(DEVICE) 
+    utts = utts.to(DEVICE)
     intent = intent.to(DEVICE)
     y_slots = y_slots.to(DEVICE)
-    attention_mask = attention_mask.to(DEVICE)
-    
+    att_mask = att_mask.to(DEVICE)
+
     new_item["utterances"] = utts
     new_item["intents"] = intent
-    new_item["y_slots"] = y_slots
-    new_item["attention_mask"] = attention_mask
-    
+    new_item["y_slots"] = y_slots 
+    new_item["attention_mask"] = att_mask
+
     return new_item
 
 # Loads data from the provided path
@@ -194,6 +198,7 @@ def prepare_data(train_path, test_path, model_path, params, training):
         if os.path.exists(model_path):
             saved_data = torch.load(model_path, map_location=DEVICE)
             lang = Lang([], [], cutoff=0)
+            lang.pad_token = PAD_TOKEN
             lang.slot2id = saved_data['slot2id']
             lang.intent2id = saved_data['intent2id']
             lang.id2slot = {v: k for k, v in lang.slot2id.items()}

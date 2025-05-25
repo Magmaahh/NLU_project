@@ -9,10 +9,9 @@ import torch.optim as optim
 from conll import evaluate
 from sklearn.metrics import classification_report
 import matplotlib.pyplot as plt
-from transformers import AutoTokenizer, BertConfig
+from transformers import AutoTokenizer
 
 from model import *
-from utils import PAD_TOKEN
 
 # Device settings
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -22,7 +21,7 @@ def train_loop(data, optimizer, criterion_slots, criterion_intents, model, clip=
     model.train() # Set model to training mode
     loss_array = []
 
-    for sample in data:
+    for sample in data: 
         optimizer.zero_grad() # Zeroing the gradient
         slots, intent = model(sample['utterances'], sample['attention_mask']) # Forward pass
         loss_intent = criterion_intents(intent, sample['intents'])
@@ -76,7 +75,7 @@ def eval_loop(data, criterion_slots, criterion_intents, model, lang):
                 utterance_temp = []
                 for i, gt_id in enumerate(gt_ids):
                     # Skip special tokens's cells
-                    if gt_id != PAD_TOKEN:
+                    if gt_id != lang.pad_token:
                         ref_slots_temp.append(lang.id2slot[gt_id])
                         hyp_slots_temp.append(lang.id2slot[seq[i].item()])
                         utterance_temp.append(utterance[i]) 
@@ -108,11 +107,8 @@ def train_model(train_loader, dev_loader, test_loader, lang, out_int, out_slot, 
     }
     slot_f1s, intent_acc, best_models = [], [], []
     
-    bert_config = BertConfig.from_pretrained("bert-base-uncased")
-    
     for run in tqdm(range(0, params["runs"])):
-        model = init_model(bert_config, out_slot, out_int, params)
-        model.apply(init_weights)
+        model = init_model(out_slot, out_int, params)
         optimizer = optim.Adam(model.parameters(), lr=params["lr"])
         
         patience = params["patience_init"]
@@ -176,18 +172,19 @@ def init_weights(mat):
                 m.bias.data.fill_(0.01)    
 
 # Initializes the model with the provided settings
-def init_model(bert_config, out_slot, out_int, params):
-    model = BERTmodel(bert_config, out_slot, out_int, params["dropout"]).to(DEVICE)
+def init_model(out_slot, out_int, params):
+    model = BERTmodel(out_slot, out_int, params["dropout"]).to(DEVICE)
+
+    model.slots_out.apply(init_weights)
+    model.int_out.apply(init_weights)
     
     return model
 
 # Loads an existing model from the provided path
 def load_model_data(model_path, out_int, out_slot):
-    bert_config = BertConfig.from_pretrained("bert-base-uncased")
-
     print("\nLoading the existing model...\n")
     saved_data = torch.load(model_path, map_location=DEVICE)
-    ref_model = init_model(bert_config, out_slot, out_int, saved_data["params"])
+    ref_model = init_model(out_slot, out_int, saved_data["params"])
     ref_model.load_state_dict(saved_data['model_state_dict'])
     ref_model.to(DEVICE)
 
@@ -256,7 +253,7 @@ def get_experiment_id(log_path):
         with open(log_path, mode="r") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                if row["model_config"] == config:
+                if row["model_type"] == config:
                     config_count += 1
 
     config_id = f"{config}_v{config_count + 1}"
