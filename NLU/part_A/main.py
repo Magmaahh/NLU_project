@@ -4,9 +4,10 @@ from functions import *
 # Paths settings
 TRAIN_DATA_PATH = "dataset/train.json"
 TEST_DATA_PATH = "dataset/test.json"
-MODELS_PATH = "bin"
-LOG_PATH = "testing_results/experiments_log.csv"
-PLOT_PATH = "testing_results/plots"
+TESTING_MODELS_PATH = "bin"
+TRAINING_MODELS_PATH = "training_results/models"
+LOG_PATH = "training_results/experiments_log.csv"
+PLOT_PATH = "training_results/plots"
 
 # Default configuration settings
 configs = {
@@ -32,7 +33,7 @@ if __name__ == "__main__":
     # Select mode and model
     select_config(configs)
     model_filename = f"{get_config(configs)}.pt"
-    model_path = os.path.join(MODELS_PATH, model_filename)
+    model_path = os.path.join(TRAINING_MODELS_PATH if configs["training"] else TESTING_MODELS_PATH, model_filename)
 
     # Prepare data
     train_loader, dev_loader, test_loader, lang, out_slot, out_int, vocab_len = prepare_data(
@@ -54,7 +55,7 @@ if __name__ == "__main__":
         )
 
         # Save the model
-        os.makedirs(MODELS_PATH, exist_ok=True)
+        os.makedirs(TRAINING_MODELS_PATH, exist_ok=True)
         model_data = {
             "model_state_dict": results["best_model"].state_dict(),
             "params": params,
