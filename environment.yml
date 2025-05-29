@@ -1,4 +1,4 @@
-name: nlu25
+name: nlu_env
 channels:
   - defaults
   - conda-forge

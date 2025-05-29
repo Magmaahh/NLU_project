@@ -35,8 +35,8 @@ In order to run the project:
 - Inside the project's folder, create and activate the Conda environment:
 
     ```bash
-    conda env create -f environment.yml -n nlu25
-    conda activate nlu25
+    conda env create -f environment.yml -n nlu_env
+    conda activate nlu_env
     ``` 
 
 Then, follow the instructions in the dedicated README files of each sub-folder to proceed.
